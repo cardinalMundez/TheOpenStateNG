@@ -2227,15 +2227,21 @@
             adminRequests: []
         };
 
-        let DB = JSON.parse(JSON.stringify(DEFAULT_DB));
+        // ==================== SHEETS API CONFIG ====================
+        const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbxwMlowUTgXxGGxxgPl_B64n6FIlJiruLfrIVGQUeUa7EaD534qGM8iT9LKoRF6Jo8ehg/exec';
+
+        // In-memory DB — populated from Sheets on load, kept in sync on every action
+        let DB = null;
         let currentUser = null;
         let currentView = 'feed';
         let activeTabs = {};
         let userVotes = {};
         let userUpvotes = new Set();
+        let _pendingActions = []; // queue for offline/retry
         let activeCommentSections = new Set();
         let lawmakers = [];
         let lawmakersLoaded = false;
+        let _dbLoaded = false; // guards against double-init
 
         // ==================== TOAST NOTIFICATION ====================
         function showToast(msg, duration=3000) {
@@ -2259,204 +2265,292 @@
             return Math.abs(hash).toString(16).padStart(8,'0') + Math.abs(hash ^ 0xdeadbeef).toString(16).padStart(8,'0');
         }
 
-        function logActivity(actType, details) {
+        // ── _lastLogEntry — returns the most recent activity log entry for persisting ─
+        function _lastLogEntry() {
+            if (!DB.activityLog || DB.activityLog.length === 0) return null;
+            return DB.activityLog[0];
+        }
+
+        function logActivity(action, details) {
             if (!currentUser) return;
             if (!DB.activityLog) DB.activityLog = [];
-            const hash = generateHash({ userId: currentUser.id, action: actType, details, ts: Date.now() });
-            const entry = { id: Date.now(), userId: currentUser.id, userName: currentUser.name, action: actType, details, timestamp: new Date().toISOString(), hash };
+            const entry = {
+                id: Date.now(),
+                userId: currentUser.id,
+                userName: currentUser.name,
+                action,
+                details,
+                timestamp: new Date().toISOString(),
+                hash: generateHash({ userId: currentUser.id, action, details, ts: Date.now() })
+            };
             DB.activityLog.unshift(entry);
             if (DB.activityLog.length > 500) DB.activityLog.pop();
-            apiPost({ action: 'logActivity', userId: currentUser.id, userName: currentUser.name, activityAction: actType, details, hash });
+            // Persist asynchronously — non-blocking so UI stays snappy
+            apiPost('logActivity', entry).catch(e => console.warn('Log persist failed:', e));
         }
 
-        // ==================== DATABASE OPERATIONS ====================
-        // ==================== SHEETS API CONFIG ====================
-        const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbxwMlowUTgXxGGxxgPl_B64n6FIlJiruLfrIVGQUeUa7EaD534qGM8iT9LKoRF6Jo8ehg/exec';
+        // ==================== DATABASE OPERATIONS (Google Sheets) ====================
         const DB_VERSION = 4;
 
-        async function apiGet(action) {
-            const res = await fetch(SHEET_API_URL + '?action=' + action);
-            return res.json();
-        }
-
-        async function apiPost(payload) {
+        // ── Core API call helper ──────────────────────────────────────────────────
+        async function apiPost(action, payload) {
             try {
-                const res = await fetch(SHEET_API_URL, { method: 'POST', body: JSON.stringify(payload) });
-                return res.json();
-            } catch (e) {
-                console.warn('apiPost failed:', e);
-                return { ok: false };
+                const res = await fetch(SHEET_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' }, // avoid CORS preflight
+                    body: JSON.stringify({ action, ...payload })
+                });
+                const data = await res.json();
+                if (data.error) console.error('API error [' + action + ']:', data.error);
+                return data;
+            } catch(e) {
+                console.error('API fetch failed [' + action + ']:', e);
+                return { error: e.message };
             }
         }
 
+        async function apiGet(params) {
+            try {
+                const qs = Object.entries(params).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&');
+                const res = await fetch(SHEET_API_URL + '?' + qs);
+                return await res.json();
+            } catch(e) {
+                console.error('API GET failed:', e);
+                return { error: e.message };
+            }
+        }
+
+        // ── saveToDB — fires targeted write to Sheets, keeps in-memory DB in sync ─
+        // In the Sheets model this is called only for actions that need persistence.
+        // Each write function calls apiPost directly; saveToDB() is kept as a no-op
+        // shim so any render functions that call it don't break.
         function saveToDB() {
-            if (currentUser) localStorage.setItem('currentUserId', currentUser.id);
+            // No-op shim — writes go directly via apiPost in each action function.
+            // updateStats is still useful for UI refresh.
             updateStats();
         }
 
+        // ── loadFromDB — fetches full DB from Sheets on startup ──────────────────
         async function loadFromDB() {
+            if (_dbLoaded) return;
             showLoadingScreen(true);
             try {
-                const data = await apiGet('fullLoad');
+                const data = await apiGet({ action: 'fullLoad' });
                 if (data && data.users && data.users.length > 0) {
                     DB = data;
-                    DB._rawUpvoteRows = Array.isArray(DB._upvotes) ? DB._upvotes : [];
-                    console.log('Sheets DB loaded: ' + DB.users.length + ' users');
-                } else { throw new Error('Bad response'); }
-            } catch (e) {
-                console.error('Load failed:', e);
-                showLoadingError(); return;
-            }
-            const savedUserId = localStorage.getItem('currentUserId');
-            if (savedUserId) {
-                currentUser = DB.users.find(u => u.id == savedUserId);
-                if (currentUser) rebuildUserUpvotes();
+                    // Restore upvotes for current user from the full upvotes list
+                    // _upvotes in DB is all [userId, reportId] pairs; we filter after login
+                    _dbLoaded = true;
+                    console.log('DB loaded from Sheets: ' + DB.users.length + ' users, ' + DB.bills.length + ' bills');
+                } else {
+                    console.error('Sheets load returned empty or invalid data', data);
+                    showLoadError();
+                    return;
+                }
+            } catch(e) {
+                console.error('Failed to load from Sheets:', e);
+                showLoadError();
+                return;
             }
             showLoadingScreen(false);
-            renderLoginScreen();
-            if (currentUser) {
-                document.getElementById('loginScreen').style.display = 'none';
-                restoreSessionUI();
-                renderCurrentView();
-                updateStats();
-                updateTrendingWidget();
-            }
         }
 
-        function rebuildUserUpvotes() {
-            userUpvotes = new Set();
-            (DB._rawUpvoteRows || []).forEach(id => userUpvotes.add(Number(id)));
-        }
-
+        // ── Loading screen helpers ────────────────────────────────────────────────
         function showLoadingScreen(show) {
             let el = document.getElementById('sheetsLoadingScreen');
             if (!el) {
                 el = document.createElement('div');
                 el.id = 'sheetsLoadingScreen';
-                el.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg-primary);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;font-family:inherit;';
-                el.innerHTML = '<div style="font-size:2.5rem;font-weight:800;color:var(--accent-blue);">OpenState<span style=\"color:#2d9cdb;\">NG</span></div><div style="color:var(--text-secondary);font-size:0.95rem;">Connecting to database...</div><div style="width:48px;height:48px;border:4px solid var(--border-light);border-top-color:var(--accent-blue);border-radius:50%;animation:spin 0.8s linear infinite;"></div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+                el.style.cssText = 'position:fixed;inset:0;background:var(--bg-primary);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;';
+                el.innerHTML = `
+                    <div style="font-size:2.5rem;font-weight:800;color:var(--accent-blue);letter-spacing:-1px;">OpenStateNG</div>
+                    <div style="display:flex;gap:0.4rem;align-items:center;">
+                        <div style="width:8px;height:8px;border-radius:50%;background:var(--accent-blue);animation:dot-pulse 1.2s ease-in-out infinite;"></div>
+                        <div style="width:8px;height:8px;border-radius:50%;background:var(--accent-blue);animation:dot-pulse 1.2s ease-in-out 0.2s infinite;"></div>
+                        <div style="width:8px;height:8px;border-radius:50%;background:var(--accent-blue);animation:dot-pulse 1.2s ease-in-out 0.4s infinite;"></div>
+                    </div>
+                    <div style="font-size:0.85rem;color:var(--text-tertiary);">Loading civic data…</div>
+                    <style>@keyframes dot-pulse{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}</style>
+                `;
                 document.body.appendChild(el);
             }
             el.style.display = show ? 'flex' : 'none';
         }
 
-        function showLoadingError() {
-            const el = document.getElementById('sheetsLoadingScreen');
-            if (el) el.innerHTML = '<div style="font-size:2rem;font-weight:800;color:var(--accent-blue);">OpenStateNG</div><div style="color:#b13e3e;text-align:center;max-width:300px;">Could not connect to the database. Check your connection.</div><button onclick="location.reload()" style="padding:0.75rem 2rem;background:var(--accent-blue);color:#fff;border:none;border-radius:8px;cursor:pointer;">Retry</button>';
+        function showLoadError() {
+            showLoadingScreen(false);
+            let el = document.getElementById('sheetsLoadingScreen');
+            if (el) el.remove();
+            const grid = document.getElementById('userSelectGrid');
+            if (grid) {
+                grid.innerHTML = `
+                    <div style="text-align:center;padding:2rem;grid-column:1/-1;">
+                        <div style="font-size:2rem;margin-bottom:1rem;">⚠️</div>
+                        <p style="color:var(--text-secondary);margin-bottom:1rem;font-weight:600;">Could not connect to the database.</p>
+                        <p style="color:var(--text-tertiary);font-size:0.85rem;margin-bottom:1.5rem;">Check your internet connection and try again.</p>
+                        <button class="submit-btn" onclick="location.reload()" style="margin:0 auto;display:block;">🔄 Retry</button>
+                    </div>`;
+            }
         }
 
-        function restoreSessionUI() {
-            document.getElementById('loginScreen').style.display = 'none';
-            document.getElementById('sidebarAvatar').textContent = currentUser.name.split(' ').map(n => n[0]).join('');
-            document.getElementById('sidebarUserName').textContent = currentUser.name;
-            document.getElementById('sidebarUserRole').textContent = currentUser.role + (getAdminLabel(currentUser) ? ' · ' + getAdminLabel(currentUser) : '');
-            const adminNav = document.getElementById('adminNavItem');
-            const adminBottomNav = document.getElementById('adminBottomNavItem');
-            const adminDrawer = document.getElementById('adminDrawerItem');
-            const show = isAdmin(currentUser);
-            if (adminNav) adminNav.style.display = show ? '' : 'none';
-            if (adminBottomNav) adminBottomNav.style.display = show ? '' : 'none';
-            if (adminDrawer) adminDrawer.style.display = show ? '' : 'none';
+        // ── Smart DB migration: adds missing records by ID, never overwrites existing data ──
+        function migrateDB() {
+            // Lightweight guard — ensures in-memory DB has all required keys
+            // (Sheets is source of truth; this just prevents null-reference errors)
+            var keys = ['courses', 'officialAccounts', 'bills', 'reports', 'projects', 'groups', 'follows', 'adminRequests', 'activityLog'];
+            keys.forEach(function(k) {
+                if (!DB[k]) DB[k] = (k === 'follows') ? {} : [];
+            });
+
+            // Ensure bills/reports have required child arrays
+            (DB.bills || []).forEach(function(bill) {
+                if (!bill.userVotes) bill.userVotes = {};
+                if (!bill.votes) bill.votes = { yes:0, no:0, abstain:0 };
+                if (!bill.comments) bill.comments = [];
+            });
+            (DB.reports || []).forEach(function(report) {
+                if (!report.comments) report.comments = [];
+                if (!report.upvotes) report.upvotes = 0;
+            });
         }
 
         function downloadDatabase() {
-            if (!isSuperAdmin(currentUser)) { showToast('Access denied - Super Admin only'); return; }
-            const exportData = { _meta: { exportedAt: new Date().toISOString(), exportedBy: currentUser.name, platform: 'OpenStateNG v3', totalUsers: DB.users.length } };
+            if (!isSuperAdmin(currentUser)) { showToast('Access denied — Super Admin only'); return; }
+            const exportData = {
+                _meta: {
+                    exportedAt: new Date().toISOString(),
+                    exportedBy: currentUser.name,
+                    platform: 'OpenStateNG v3',
+                    totalUsers: DB.users.length,
+                    totalBills: DB.bills.length,
+                    totalReports: DB.reports.length,
+                    totalCourses: DB.courses.length,
+                    totalOfficialAccounts: DB.officialAccounts.length
+                }
+            };
             Object.assign(exportData, DB);
             const json = JSON.stringify(exportData, null, 2);
             const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = 'OpenStateNG_DB_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.json';
+            a.href = url;
+            a.download = 'OpenStateNG_DB_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.json';
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            showToast('Database exported');
+            showToast('⬇ Database exported — ' + DB.users.length + ' users · ' + DB.courses.length + ' courses');
             logActivity('DB_EXPORT', 'Full database exported by Super Admin');
         }
 
         function resetDatabase() {
-            if (confirm('Clear your session and reload? Your data in the Sheets database is not affected.')) {
-                localStorage.removeItem('currentUserId');
+            if (confirm('Are you sure you want to reset your local session? The Sheets database is unaffected.')) {
+                localStorage.clear();
                 location.reload();
             }
         }
 
-        function addComment(type, id, text) {
+        async function addComment(type, id, text) {
             const item = type === 'bill' ? DB.bills.find(b => b.id === id) : DB.reports.find(r => r.id === id);
-            if (item && currentUser) {
-                const newComment = { id: Date.now(), author: currentUser.name, authorId: currentUser.id, text, timestamp: new Date().toISOString() };
-                item.comments.push(newComment);
-                currentUser.stats.commentsPosted++;
-                updateCredibility(currentUser, CCS_POINTS.comment, 'comment');
-                logActivity('COMMENT', 'Commented on ' + type + ' #' + id);
-                saveToDB();
-                showToast('+' + CCS_POINTS.comment + ' CCS - Comment recorded');
-                apiPost({ action: 'addComment', type, itemId: id, userId: currentUser.id, author: currentUser.name, text, hash: generateHash({ userId: currentUser.id, action: 'COMMENT', itemId: id, ts: Date.now() }) });
-            }
+            if (!item || !currentUser) return;
+            // Optimistic update
+            const newComment = { id: Date.now(), author: currentUser.name, authorId: currentUser.id, text, timestamp: new Date().toISOString() };
+            item.comments.push(newComment);
+            currentUser.stats.commentsPosted++;
+            updateCredibility(currentUser, CCS_POINTS.comment, 'comment');
+            logActivity('COMMENT', `Commented on ${type} #${id}`);
+            showToast(`+${CCS_POINTS.comment} CCS — Comment recorded`);
+            renderCurrentView();
+            // Persist to Sheets
+            await apiPost('addComment', { type, itemId: id, userId: currentUser.id, author: currentUser.name, text });
+            await apiPost('logActivity', _lastLogEntry());
         }
 
-        function addReport(data) {
-            const newReport = { id: DB.reports.length + 1, title: data.title, location: data.location, category: data.category, description: data.description, status: 'reported', upvotes: 0, image: false, createdBy: currentUser.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), taggedLawmakers: data.taggedLawmakers || [], taggedOfficials: data.taggedOfficials || [], comments: [] };
+        async function addReport(data) {
+            const newReport = {
+                id: Date.now(), // temp ID, sheet assigns real one
+                title: data.title, location: data.location, category: data.category,
+                description: data.description, status: 'reported', upvotes: 0, image: false,
+                createdBy: currentUser.id, createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                taggedLawmakers: data.taggedLawmakers || [],
+                taggedOfficials: data.taggedOfficials || [],
+                taggedUsers: data.taggedUsers || [],
+                comments: []
+            };
             DB.reports.unshift(newReport);
             currentUser.stats.reports++;
             currentUser.stats.contributions++;
             updateCredibility(currentUser, CCS_POINTS.report, 'report');
-            logActivity('REPORT_FILED', 'Filed report: "' + data.title + '" in ' + data.location);
-            saveToDB();
-            showToast('+' + CCS_POINTS.report + ' CCS - Issue report authenticated');
-            apiPost({ action: 'addReport', userId: currentUser.id, report: data, hash: generateHash({ userId: currentUser.id, action: 'REPORT_FILED', title: data.title, ts: Date.now() }) });
+            logActivity('REPORT_FILED', `Filed report: "${data.title}" in ${data.location}`);
+            showToast(`+${CCS_POINTS.report} CCS — Issue report authenticated`);
+            renderCurrentView();
+            const res = await apiPost('addReport', { report: data, userId: currentUser.id });
+            if (res && res.id) newReport.id = res.id; // update with real sheet ID
+            await apiPost('logActivity', _lastLogEntry());
             return newReport;
         }
 
-        function addBill(data) {
-            const newBill = { id: DB.bills.length + 1, title: data.title, sponsor: currentUser.name, sponsorId: currentUser.id, stage: data.stage || 'Draft', summary: data.summary, impact: data.impact, constitutional: data.constitutional, pros: data.pros, cons: data.cons, votes: { yes: 0, no: 0, abstain: 0 }, createdBy: currentUser.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), taggedLawmakers: data.taggedLawmakers || [], comments: [], userVotes: {} };
+        async function addBill(data) {
+            const newBill = {
+                id: Date.now(),
+                title: data.title, sponsor: currentUser.name, sponsorId: currentUser.id,
+                stage: data.stage || 'Draft', summary: data.summary, impact: data.impact,
+                constitutional: data.constitutional, pros: data.pros, cons: data.cons,
+                votes: { yes:0, no:0, abstain:0 }, createdBy: currentUser.id,
+                createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                taggedLawmakers: data.taggedLawmakers || [], comments: [], userVotes: {}
+            };
             DB.bills.unshift(newBill);
             currentUser.stats.contributions++;
             updateCredibility(currentUser, CCS_POINTS.bill_sponsor, 'bill');
-            logActivity('BILL_CREATED', 'Created bill: "' + data.title + '" (Stage: ' + data.stage + ')');
-            saveToDB();
-            showToast('+' + CCS_POINTS.bill_sponsor + ' CCS - Bill authenticated & published');
-            apiPost({ action: 'addBill', userId: currentUser.id, bill: data, hash: generateHash({ userId: currentUser.id, action: 'BILL_CREATED', title: data.title, ts: Date.now() }) });
+            logActivity('BILL_CREATED', `Created bill: "${data.title}" (Stage: ${data.stage})`);
+            showToast(`+${CCS_POINTS.bill_sponsor} CCS — Bill authenticated & published`);
+            renderCurrentView();
+            const res = await apiPost('addBill', { bill: data, userId: currentUser.id });
+            if (res && res.id) newBill.id = res.id;
+            await apiPost('logActivity', _lastLogEntry());
             return newBill;
         }
 
-        function addProject(data) {
-            const newProject = { id: DB.projects.length + 1, title: data.title, allocated: data.allocated, completion: 0, category: data.category };
+        async function addProject(data) {
+            const newProject = { id: Date.now(), title: data.title, allocated: data.allocated, completion: 0, category: data.category };
             DB.projects.push(newProject);
-            saveToDB();
-            apiPost({ action: 'addProject', title: data.title, allocated: data.allocated, category: data.category });
+            renderCurrentView();
+            const res = await apiPost('addProject', data);
+            if (res && res.id) newProject.id = res.id;
             return newProject;
         }
 
-        function updateProject(id, completion) {
+        async function updateProject(id, completion) {
             const project = DB.projects.find(p => p.id === id);
             if (project) {
                 project.completion = Math.min(Math.max(completion, 0), 100);
-                saveToDB();
-                apiPost({ action: 'updateProject', id, completion: project.completion });
+                renderCurrentView();
+                await apiPost('updateProject', { id, completion: project.completion });
             }
         }
 
-        function updateUserProfile(userId, updates) {
+        async function updateUserProfile(userId, updates) {
             const user = DB.users.find(u => u.id === userId);
             if (user) {
                 Object.assign(user, updates);
-                if (currentUser.id === userId) currentUser = user;
-                saveToDB();
-                apiPost({ action: 'updateUser', userId, updates });
+                if (currentUser && currentUser.id === userId) currentUser = user;
+                updateStats();
+                await apiPost('updateUser', { userId, updates });
             }
         }
 
-        function vote(billId, voteType) {
+        async function vote(billId, voteType) {
             const bill = DB.bills.find(b => b.id === billId);
             if (!bill || !currentUser) return;
             if (!bill.userVotes) bill.userVotes = {};
             const uid = String(currentUser.id);
             const prevVote = bill.userVotes[uid];
+
+            // Reverse previous vote
             if (prevVote) bill.votes[prevVote] = Math.max(0, (bill.votes[prevVote] || 0) - 1);
+
             if (prevVote === voteType) {
                 delete bill.userVotes[uid];
-                apiPost({ action: 'vote', userId: currentUser.id, billId, voteType: null, hash: generateHash({ userId: currentUser.id, action: 'UNVOTE', billId, ts: Date.now() }) });
             } else {
                 bill.userVotes[uid] = voteType;
                 bill.votes[voteType] = (bill.votes[voteType] || 0) + 1;
@@ -2468,40 +2562,51 @@
                 }
                 const voteLabel = voteType === 'yes' ? 'Support' : voteType === 'no' ? 'Oppose' : 'Abstain';
                 logActivity('VOTE_CAST', 'Voted ' + voteLabel.toUpperCase() + ' on bill: "' + bill.title + '"');
-                showToast('+' + CCS_POINTS.vote + ' CCS - Vote authenticated');
-                apiPost({ action: 'vote', userId: currentUser.id, billId, voteType, hash: generateHash({ userId: currentUser.id, action: 'VOTE_CAST', billId, voteType, ts: Date.now() }) });
+                showToast('+' + CCS_POINTS.vote + ' CCS — Vote authenticated ✓');
             }
-            saveToDB();
+            updateStats();
             renderCurrentView();
+            await apiPost('vote', { userId: currentUser.id, billId, voteType: prevVote === voteType ? null : voteType });
+            if (prevVote !== voteType && voteType) await apiPost('logActivity', _lastLogEntry());
         }
 
-        function toggleUpvote(reportId) {
+        async function toggleUpvote(reportId) {
             const report = DB.reports.find(r => r.id === reportId);
-            if (!report) return;
-            if (userUpvotes.has(reportId)) {
+            if (!report || !currentUser) return;
+
+            const alreadyLiked = userUpvotes.has(reportId);
+
+            if (alreadyLiked) {
+                // Remove like
                 userUpvotes.delete(reportId);
-                report.upvotes--;
+                report.upvotes = Math.max(0, report.upvotes - 1);
+                // Remove from DB._upvotes so other code stays consistent
+                if (DB._upvotes) {
+                    DB._upvotes = DB._upvotes.filter(r =>
+                        !(Number(r.userId) === Number(currentUser.id) && Number(r.reportId) === Number(reportId))
+                    );
+                }
             } else {
+                // Add like
                 userUpvotes.add(reportId);
                 report.upvotes++;
+                // Add to DB._upvotes so switching views doesn't reset it
+                if (!DB._upvotes) DB._upvotes = [];
+                DB._upvotes.push({ userId: currentUser.id, reportId: reportId });
                 updateCredibility(currentUser, CCS_POINTS.like, 'like');
-                logActivity('UPVOTE', 'Upvoted report: "' + report.title + '"');
-                showToast('+' + CCS_POINTS.like + ' CCS - Upvote recorded');
+                logActivity('UPVOTE', `Upvoted report: "${report.title}"`);
+                showToast(`+${CCS_POINTS.like} CCS — Upvote recorded`);
             }
-            apiPost({ action: 'toggleUpvote', userId: currentUser.id, reportId, hash: generateHash({ userId: currentUser.id, action: 'UPVOTE', reportId, ts: Date.now() }) });
-            saveToDB();
+
             renderCurrentView();
+            // Tell Sheets — it will add or remove based on whether the row exists
+            await apiPost('toggleUpvote', { userId: currentUser.id, reportId });
         }
 
+        // CCS point values (major vs minor)
         const CCS_POINTS = {
-            vote: 5,          // major - mirror vote on a bill
-            report: 8,        // major - filing an issue report
-            course: 10,       // major - completing a civic education course
-            budget_activity: 7, // major - budget interaction
-            comment: 1,       // minor
-            like: 0.5,        // minor
-            bill_sponsor: 12, // major - creating a bill
-            verification: 20  // major - account verification
+            vote: 5, report: 8, course: 10, budget_activity: 7,
+            comment: 1, like: 0.5, bill_sponsor: 12, verification: 20
         };
 
         function updateCredibility(user, points, actionType) {
@@ -2579,6 +2684,7 @@
         // Tagged lawmakers state per form
         let currentTaggedLawmakers = [];
         let currentTaggedOfficials = [];
+        let currentTaggedUsers = [];     // up to 10 app users tagged per report
 
         function toggleOfficialTag(official) {
             const idx = currentTaggedOfficials.findIndex(o => o.id === official.id);
@@ -2668,14 +2774,115 @@
             }
         }
 
+        // ── User tagging widget (tags app users, up to 10) ────────────────────────
+        function renderUserTagWidget(containerId, tagContainerId) {
+            return `
+            <div class="form-group">
+                <label class="form-label">Tag App Users (optional, max 10)</label>
+                <div class="lawmaker-search-wrap">
+                    <input type="text" class="form-input" id="${containerId}"
+                        placeholder="Search by name, username, or role..."
+                        oninput="onUserTagSearch(this, '${tagContainerId}')"
+                        autocomplete="off">
+                    <div class="lawmaker-suggestions" id="${containerId}_list" style="display:none"></div>
+                </div>
+                <div id="${tagContainerId}" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin-top:0.5rem;"></div>
+            </div>`;
+        }
+
+        function onUserTagSearch(input, tagContainerId) {
+            const q = (input.value || '').toLowerCase().trim();
+            const listEl = document.getElementById(input.id + '_list');
+            if (!listEl) return;
+            if (q.length < 1) { listEl.style.display = 'none'; return; }
+
+            // Filter out: current user, already-tagged users, generated users
+            const results = (DB.users || [])
+                .filter(u =>
+                    !u.generated &&
+                    u.id !== currentUser.id &&
+                    !currentTaggedUsers.find(t => t.id === u.id) &&
+                    (u.name.toLowerCase().includes(q) ||
+                     (u.username || '').toLowerCase().includes(q) ||
+                     (u.role || '').toLowerCase().includes(q))
+                )
+                .slice(0, 8);
+
+            if (results.length === 0) { listEl.style.display = 'none'; return; }
+
+            listEl.style.display = 'block';
+            listEl.innerHTML = results.map(u => `
+                <div class="lawmaker-suggestion"
+                    onclick="tagAppUser(${u.id}, '${input.id}', '${tagContainerId}')">
+                    <strong>${u.name}</strong>
+                    <small>@${u.username || u.id} · ${u.role} · ${u.state}</small>
+                </div>
+            `).join('');
+        }
+
+        function tagAppUser(userId, inputId, tagContainerId) {
+            if (currentTaggedUsers.length >= 10) {
+                showToast('Maximum 10 users can be tagged'); return;
+            }
+            const user = DB.users.find(u => u.id === userId);
+            if (!user || currentTaggedUsers.find(t => t.id === userId)) return;
+            currentTaggedUsers.push({ id: user.id, name: user.name, username: user.username, role: user.role });
+            _refreshUserTagDisplay(tagContainerId);
+            const inputEl = document.getElementById(inputId);
+            if (inputEl) inputEl.value = '';
+            const listEl = document.getElementById(inputId + '_list');
+            if (listEl) listEl.style.display = 'none';
+        }
+
+        function untagAppUser(userId, tagContainerId) {
+            currentTaggedUsers = currentTaggedUsers.filter(u => u.id !== userId);
+            _refreshUserTagDisplay(tagContainerId);
+        }
+
+        function _refreshUserTagDisplay(tagContainerId) {
+            const tagEl = document.getElementById(tagContainerId);
+            if (!tagEl) return;
+            tagEl.innerHTML = currentTaggedUsers.map(u => `
+                <span class="tagged-lawmaker" style="background:#f0f4ff;color:#1e4a6d;border-color:#c7d7f5;"
+                    onclick="untagAppUser(${u.id}, '${tagContainerId}')">
+                    🧑 @${u.username || u.name} <span class="remove-tag">×</span>
+                </span>
+            `).join('');
+        }
+
         // ==================== AUTHENTICATION ====================
         function login(userId) {
             currentUser = DB.users.find(u => u.id === userId);
             if (currentUser) {
-                rebuildUserUpvotes();
-                restoreSessionUI();
-                logActivity('LOGIN', 'Logged in as ' + currentUser.role + ' from ' + currentUser.state);
-                saveToDB();
+                // Restore this user's upvotes from the full Upvotes dataset.
+                // DB._upvotes is [{userId, reportId}, ...] — one row per user+report pair.
+                // We filter to only this user's rows and extract the reportIds.
+                userUpvotes = new Set();
+                if (DB._upvotes && Array.isArray(DB._upvotes)) {
+                    DB._upvotes.forEach(function(row) {
+                        // row is {userId, reportId} from the fixed AppScript readUpvotes()
+                        if (Number(row.userId) === Number(currentUser.id)) {
+                            userUpvotes.add(Number(row.reportId));
+                        }
+                    });
+                }
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('sidebarAvatar').textContent = currentUser.name.split(' ').map(n => n[0]).join('');
+                document.getElementById('sidebarUserName').textContent = currentUser.name;
+                document.getElementById('sidebarUserRole').textContent = currentUser.role + (getAdminLabel(currentUser) ? ' · ' + getAdminLabel(currentUser) : '');
+                const adminNav = document.getElementById('adminNavItem');
+                const adminBottomNav = document.getElementById('adminBottomNavItem');
+                const adminDrawer = document.getElementById('adminDrawerItem');
+                if (isAdmin(currentUser)) {
+                    if (adminNav) adminNav.style.display = '';
+                    if (adminBottomNav) adminBottomNav.style.display = '';
+                    if (adminDrawer) adminDrawer.style.display = '';
+                } else {
+                    if (adminNav) adminNav.style.display = 'none';
+                    if (adminBottomNav) adminBottomNav.style.display = 'none';
+                    if (adminDrawer) adminDrawer.style.display = 'none';
+                }
+                logActivity('LOGIN', `Logged in as ${currentUser.role} from ${currentUser.state}`);
                 renderCurrentView();
                 updateStats();
                 updateTrendingWidget();
@@ -2686,7 +2893,6 @@
             if (confirm('Are you sure you want to logout?')) {
                 currentUser = null;
                 userUpvotes = new Set();
-                localStorage.removeItem('currentUserId');
                 location.reload();
             }
         }
@@ -2785,6 +2991,7 @@
             const feed = document.getElementById('mainFeed');
             currentTaggedLawmakers = [];
             currentTaggedOfficials = [];
+            currentTaggedUsers = [];
             loadLawmakers();
             feed.innerHTML = `
                 <div class="card">
@@ -2819,6 +3026,7 @@
                             <textarea class="form-textarea" name="description" required placeholder="Describe the issue in detail..."></textarea>
                         </div>
                         ${renderLawyerSearchWidget('reportLawyerSearch', 'reportTagContainer')}
+                        ${renderUserTagWidget('reportUserSearch', 'reportUserTagContainer')}
                         <div class="form-group">
                             <label class="form-label">Tag a Government Agency / Official Body</label>
                             <p style="font-size:0.78rem;color:var(--text-tertiary);margin-bottom:0.5rem;">Tap to tag — selected agencies will be shown on your report</p>
@@ -2937,71 +3145,8 @@
         }
 
         function ensureGeneratedUsers() {
-            // Use DB-internal flag so it travels with DB export/import
-            if (DB._usersGenerated === 'v1' && DB.users.length > 6) return;
-
-            // Ensure the 6 named base users from DEFAULT_DB always exist
-            DEFAULT_DB.users.forEach(function(defaultUser) {
-                var exists = DB.users.find(function(u) { return u.id === defaultUser.id; });
-                if (!exists) {
-                    var fresh = JSON.parse(JSON.stringify(defaultUser));
-                    fresh.generated = false;
-                    DB.users.push(fresh);
-                } else {
-                    // Make sure named users are never marked as generated
-                    exists.generated = false;
-                }
-            });
-
-            // Generate additional users up to 500 total
-            var needed = Math.max(0, 500 - DB.users.length);
-            if (needed === 0) {
-                DB._usersGenerated = 'v1';
-                return;
-            }
-
-            const rng = function(seed) {
-                var x = Math.sin(seed + 1) * 10000;
-                return x - Math.floor(x);
-            };
-
-            var nextId = Math.max.apply(null, DB.users.map(function(u) { return u.id; })) + 1;
-
-            for (var i = 0; i < needed; i++) {
-                var seed = nextId * 7 + i * 13;
-                var firstName = NIGERIAN_FIRST_NAMES[Math.floor(rng(seed) * NIGERIAN_FIRST_NAMES.length)];
-                var lastName = NIGERIAN_LAST_NAMES[Math.floor(rng(seed+1) * NIGERIAN_LAST_NAMES.length)];
-                var state = STATES[Math.floor(rng(seed+2) * STATES.length)];
-                var role = ROLES[Math.floor(rng(seed+3) * ROLES.length)];
-                var edu = EDUCATIONS[Math.floor(rng(seed+4) * EDUCATIONS.length)];
-                var age = 18 + Math.floor(rng(seed+5) * 47);
-                var credibility = Math.floor(rng(seed+6) * 90) + 5;
-                var tier = credibility >= 80 ? 5 : credibility >= 60 ? 4 : credibility >= 40 ? 3 : credibility >= 20 ? 2 : 1;
-                var votes = Math.floor(rng(seed+7) * 80);
-                var reports = Math.floor(rng(seed+8) * 15);
-                var courses = Math.floor(rng(seed+9) * 8);
-
-                DB.users.push({
-                    id: nextId,
-                    username: generateUserName(firstName, lastName, nextId),
-                    name: firstName + ' ' + lastName,
-                    email: firstName.toLowerCase() + '.' + lastName.toLowerCase() + nextId + '@test.ng',
-                    state: state,
-                    lga: state + ' LGA',
-                    tier: tier,
-                    credibility: credibility,
-                    role: role,
-                    adminLevel: 0,
-                    education: edu,
-                    age: age,
-                    generated: true,
-                    stats: { votes: votes, reports: reports, courses: courses, contributions: votes + reports + courses, commentsPosted: Math.floor(rng(seed+10) * 20) }
-                });
-                nextId++;
-            }
-
-            DB._usersGenerated = 'v1';
-            saveToDB();
+            // No-op — user generation happens in Sheets via setupAllSheets().
+            // The 500 generated users are loaded from the database on startup.
         }
 
         // ==================== ADMIN HELPERS ====================
@@ -3130,35 +3275,44 @@
             document.body.appendChild(modal);
         }
 
-        function completeLesson(courseId, lessonId, btn) {
+        async function completeLesson(courseId, lessonId, btn) {
             if (!currentUser) return;
             if (isLessonDone(lessonId)) return;
-            var course = null;
-            for (var i = 0; i < DB.courses.length; i++) { if (DB.courses[i].id === courseId) { course = DB.courses[i]; break; } }
+
+            var course = DB.courses.find(c => c.id === courseId);
             if (!course) return;
-            var lessonTitle = lessonId, lessonIdx = -1;
-            for (var j = 0; j < course.lessons.length; j++) { if (course.lessons[j].id === lessonId) { lessonTitle = course.lessons[j].title; lessonIdx = j; break; } }
+
+            var lessonIdx = course.lessons.findIndex(l => l.id === lessonId);
+            var lessonTitle = lessonIdx >= 0 ? course.lessons[lessonIdx].title : lessonId;
+
             markLessonDone(lessonId);
             updateCredibility(currentUser, course.ccsPerLesson, 'course');
             logActivity('LESSON_COMPLETED', 'Completed lesson "' + lessonTitle + '" in "' + course.title + '"');
-            var allDone = true;
-            for (var k = 0; k < course.lessons.length; k++) { if (!isLessonDone(course.lessons[k].id)) { allDone = false; break; } }
-            apiPost({ action: 'lessonDone', userId: currentUser.id, lessonId, courseId, ccsPoints: course.ccsPerLesson, courseComplete: allDone, hash: generateHash({ userId: currentUser.id, action: 'LESSON_COMPLETED', lessonId, ts: Date.now() }) });
+
+            var allDone = course.lessons.every(l => isLessonDone(l.id));
+
             if (allDone) {
                 currentUser.stats.courses++;
                 currentUser.stats.contributions++;
-                saveToDB();
-                showToast('Course complete! +' + (course.lessons.length * course.ccsPerLesson) + ' CCS earned');
+                showToast('🏆 Course complete! +' + (course.lessons.length * course.ccsPerLesson) + ' CCS earned');
                 btn.closest('.modal-overlay').remove();
                 renderCurrentView();
             } else {
-                saveToDB();
-                showToast('+' + course.ccsPerLesson + ' CCS - Lesson authenticated');
+                showToast('+' + course.ccsPerLesson + ' CCS — Lesson authenticated');
                 var nextLesson = lessonIdx + 1 < course.lessons.length ? course.lessons[lessonIdx + 1] : null;
                 btn.closest('.modal-overlay').remove();
-                if (nextLesson) { setTimeout(function() { openLessonModal(courseId, nextLesson.id); }, 200); }
-                else { renderCurrentView(); }
+                if (nextLesson) {
+                    setTimeout(function() { openLessonModal(courseId, nextLesson.id); }, 200);
+                } else {
+                    renderCurrentView();
+                }
             }
+            updateStats();
+            await apiPost('lessonDone', {
+                userId: currentUser.id, lessonId, courseId,
+                ccsPoints: course.ccsPerLesson,
+                courseComplete: allDone
+            });
         }
 
         // ==================== FOLLOW SYSTEM ====================
@@ -3168,23 +3322,22 @@
             return myFollows.includes(targetUserId);
         }
 
-        function toggleFollow(targetUserId) {
+        async function toggleFollow(targetUserId) {
             if (!DB.follows) DB.follows = {};
             if (!DB.follows[currentUser.id]) DB.follows[currentUser.id] = [];
             const idx = DB.follows[currentUser.id].indexOf(targetUserId);
             const target = DB.users.find(u => u.id === targetUserId);
             if (idx >= 0) {
                 DB.follows[currentUser.id].splice(idx, 1);
-                showToast('Unfollowed ' + (target ? target.name : 'user'));
-                logActivity('UNFOLLOW', 'Unfollowed user #' + targetUserId);
+                showToast(`Unfollowed ${target?.name || 'user'}`);
+                logActivity('UNFOLLOW', `Unfollowed user #${targetUserId}`);
             } else {
                 DB.follows[currentUser.id].push(targetUserId);
-                showToast('Now following ' + (target ? target.name : 'user'));
-                logActivity('FOLLOW', 'Followed ' + (target ? target.name : 'user #' + targetUserId));
+                showToast(`Now following ${target?.name || 'user'}`);
+                logActivity('FOLLOW', `Followed ${target?.name || 'user #' + targetUserId}`);
             }
-            apiPost({ action: 'toggleFollow', userId: currentUser.id, targetUserId, hash: generateHash({ userId: currentUser.id, action: 'FOLLOW', targetUserId, ts: Date.now() }) });
-            saveToDB();
             renderCurrentView();
+            await apiPost('toggleFollow', { userId: currentUser.id, targetUserId });
         }
 
         function getFollowersOf(userId) {
@@ -3195,19 +3348,17 @@
         }
 
         // ==================== GROUP CHAT ====================
-        function sendGroupMessage(groupId) {
-            const input = document.getElementById('groupChatInput_' + groupId);
+        async function sendGroupMessage(groupId) {
+            const input = document.getElementById(`groupChatInput_${groupId}`);
             if (!input || !input.value.trim()) return;
             const group = (DB.groups || []).find(g => g.id === groupId);
             if (!group) return;
             if (!group.messages) group.messages = [];
-            const text = input.value.trim();
-            const msg = { id: Date.now(), authorId: currentUser.id, author: currentUser.name, text, timestamp: new Date().toISOString() };
+            const msg = { id: Date.now(), authorId: currentUser.id, author: currentUser.name, text: input.value.trim(), timestamp: new Date().toISOString() };
             group.messages.push(msg);
             input.value = '';
-            apiPost({ action: 'sendMessage', groupId, authorId: currentUser.id, author: currentUser.name, text, hash: generateHash({ userId: currentUser.id, action: 'MSG', groupId, ts: Date.now() }) });
-            saveToDB();
             renderGroupChat(groupId);
+            await apiPost('sendMessage', { groupId, authorId: currentUser.id, author: currentUser.name, text: msg.text });
         }
 
         function renderGroupChat(groupId) {
@@ -3225,28 +3376,26 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function joinGroup(groupId) {
+        async function joinGroup(groupId) {
             const group = (DB.groups || []).find(g => g.id === groupId);
             if (!group) return;
             if (!group.members.includes(currentUser.id)) {
                 group.members.push(currentUser.id);
-                logActivity('GROUP_JOIN', 'Joined group: "' + group.name + '"');
-                apiPost({ action: 'joinGroup', groupId, userId: currentUser.id });
-                saveToDB();
-                showToast('Joined "' + group.name + '" 🎉');
+                logActivity('GROUP_JOIN', `Joined group: "${group.name}"`);
+                showToast(`Joined "${group.name}" 🎉`);
                 renderCurrentView();
+                await apiPost('joinGroup', { groupId, userId: currentUser.id });
             }
         }
 
-        function leaveGroup(groupId) {
+        async function leaveGroup(groupId) {
             const group = (DB.groups || []).find(g => g.id === groupId);
             if (!group) return;
             group.members = group.members.filter(id => id !== currentUser.id);
-            logActivity('GROUP_LEAVE', 'Left group: "' + group.name + '"');
-            apiPost({ action: 'leaveGroup', groupId, userId: currentUser.id });
-            saveToDB();
-            showToast('Left "' + group.name + '"');
+            logActivity('GROUP_LEAVE', `Left group: "${group.name}"`);
+            showToast(`Left "${group.name}"`);
             renderCurrentView();
+            await apiPost('leaveGroup', { groupId, userId: currentUser.id });
         }
 
         function showCreateGroupModal() {
@@ -3289,20 +3438,37 @@
             document.body.appendChild(modal);
         }
 
-        function submitCreateGroup(event) {
+        async function submitCreateGroup(event) {
             event.preventDefault();
             const form = event.target;
             if (!DB.groups) DB.groups = [];
-            const name = form.name.value;
-            const desc = form.description.value;
-            const newGroup = { id: DB.groups.length + 1, name, description: desc, category: form.category.value, createdBy: currentUser.id, members: [currentUser.id], createdAt: new Date().toISOString(), messages: [{ id: Date.now(), authorId: currentUser.id, author: currentUser.name, text: 'Welcome to ' + name + '! This group was created to discuss ' + desc + '.', timestamp: new Date().toISOString() }] };
+            const newGroup = {
+                id: Date.now(),
+                name: form.name.value,
+                description: form.description.value,
+                category: form.category.value,
+                createdBy: currentUser.id,
+                members: [currentUser.id],
+                createdAt: new Date().toISOString(),
+                messages: [{
+                    id: Date.now(),
+                    authorId: currentUser.id,
+                    author: currentUser.name,
+                    text: `Welcome to ${form.name.value}! This group was created to discuss ${form.description.value}.`,
+                    timestamp: new Date().toISOString()
+                }]
+            };
             DB.groups.push(newGroup);
-            logActivity('GROUP_CREATED', 'Created group: "' + newGroup.name + '"');
-            apiPost({ action: 'createGroup', name, description: desc, category: form.category.value, createdBy: currentUser.id, creatorName: currentUser.name });
-            saveToDB();
+            logActivity('GROUP_CREATED', `Created group: "${newGroup.name}"`);
             form.closest('.modal-overlay').remove();
-            showToast('Group "' + newGroup.name + '" created!');
+            showToast(`Group "${newGroup.name}" created!`);
             renderCurrentView();
+            const res = await apiPost('createGroup', {
+                name: newGroup.name, description: newGroup.description,
+                category: newGroup.category, createdBy: currentUser.id,
+                creatorName: currentUser.name
+            });
+            if (res && res.id) newGroup.id = res.id;
         }
 
         // ==================== COMMUNITY VIEW ====================
@@ -3508,72 +3674,53 @@
             document.body.appendChild(modal);
         }
 
-        function editOfficialAccount(id, btn) {
+        async function editOfficialAccount(id, btn) {
             var acc = (DB.officialAccounts || []).find(function(a) { return a.id === id; });
             if (!acc) return;
-            var name = prompt('Short name:', acc.name);
-            if (name === null) return;
-            var fullName = prompt('Full name:', acc.fullName);
-            if (fullName === null) return;
-            var hotline = prompt('Hotline:', acc.hotline || '');
-            if (hotline === null) return;
-            var contact = prompt('Email:', acc.contact || '');
-            if (contact === null) return;
-            var website = prompt('Website:', acc.website || '');
-            if (website === null) return;
-            var description = prompt('Description:', acc.description || '');
-            if (description === null) return;
-
-            acc.name = name;
-            acc.fullName = fullName;
-            acc.hotline = hotline;
-            acc.contact = contact;
-            acc.website = website;
-            acc.description = description;
-
+            var name = prompt('Short name:', acc.name); if (name === null) return;
+            var fullName = prompt('Full name:', acc.fullName); if (fullName === null) return;
+            var hotline = prompt('Hotline:', acc.hotline || ''); if (hotline === null) return;
+            var contact = prompt('Email:', acc.contact || ''); if (contact === null) return;
+            var website = prompt('Website:', acc.website || ''); if (website === null) return;
+            var description = prompt('Description:', acc.description || ''); if (description === null) return;
+            acc.name = name; acc.fullName = fullName; acc.hotline = hotline;
+            acc.contact = contact; acc.website = website; acc.description = description;
             logActivity('OFFICIAL_EDITED', 'Edited official account: ' + name);
-            apiPost({ action: 'editOfficial', official: acc });
-            saveToDB();
             showToast(name + ' updated in database');
             btn.closest('.modal-overlay').remove();
             renderOfficialAccounts();
+            await apiPost('editOfficial', { official: acc });
         }
 
-        function addOfficialAccount(event) {
+        async function addOfficialAccount(event) {
             event.preventDefault();
             const form = event.target;
             if (!DB.officialAccounts) DB.officialAccounts = [];
             const newAcc = {
                 id: 'custom_' + Date.now(),
-                name: form.name.value.trim(),
-                fullName: form.fullName.value.trim(),
+                name: form.name.value.trim(), fullName: form.fullName.value.trim(),
                 type: form.type.value.trim() || form.category.value,
-                category: form.category.value,
-                verified: true,
+                category: form.category.value, verified: true,
                 avatar: form.avatar.value || '🏛',
-                contact: form.contact.value.trim(),
-                hotline: form.hotline.value.trim(),
-                website: form.website.value.trim(),
-                description: form.description.value.trim(),
+                contact: form.contact.value.trim(), hotline: form.hotline.value.trim(),
+                website: form.website.value.trim(), description: form.description.value.trim(),
                 tagId: form.tagId.value.trim()
             };
             DB.officialAccounts.push(newAcc);
             logActivity('OFFICIAL_ADDED', 'Added official account: ' + newAcc.name);
-            apiPost({ action: 'addOfficial', official: newAcc });
-            saveToDB();
             showToast(newAcc.name + ' added to database');
             form.closest('.modal-overlay').remove();
             renderOfficialAccounts();
+            await apiPost('addOfficial', { official: newAcc });
         }
 
-        function removeOfficialAccount(id, btn) {
+        async function removeOfficialAccount(id, btn) {
             if (!confirm('Remove this official account?')) return;
             DB.officialAccounts = (DB.officialAccounts || []).filter(o => o.id !== id);
-            apiPost({ action: 'removeOfficial', officialId: id });
-            saveToDB();
             showToast('Official account removed');
             btn.closest('.modal-overlay').remove();
             renderOfficialAccounts();
+            await apiPost('removeOfficial', { officialId: id });
         }
 
         function renderScorecards() {
@@ -4091,42 +4238,97 @@
             renderAdminPanel();
         }
 
-        function changeReportStatus(reportId, newStatus) {
+        async function changeReportStatus(reportId, newStatus) {
             const report = DB.reports.find(r => r.id === reportId);
             if (!report) return;
-            const oldStatus = report.status;
+            const old = report.status;
             report.status = newStatus;
-            logActivity('STATUS_CHANGE', 'Changed report "' + report.title + '" status: ' + oldStatus + ' to ' + newStatus);
-            apiPost({ action: 'changeReportStatus', reportId, status: newStatus, hash: generateHash({ userId: currentUser.id, action: 'STATUS_CHANGE', reportId, newStatus, ts: Date.now() }) });
-            saveToDB();
-            showToast('Report status updated: ' + newStatus);
+            logActivity('STATUS_CHANGE', `Changed report "${report.title}" status: ${old} → ${newStatus}`);
+            showToast(`Report status updated: ${newStatus}`);
+            await apiPost('changeReportStatus', { reportId, status: newStatus });
         }
 
-        function setUserAdminLevel(userId, level) {
+        async function setUserAdminLevel(userId, level) {
             if (!isSuperAdmin(currentUser)) return;
             const user = DB.users.find(u => u.id === userId);
             if (!user) return;
             const oldLevel = user.adminLevel || 0;
             user.adminLevel = level;
             const levelName = level === 2 ? 'Super Admin' : level === 1 ? 'Admin' : 'Regular';
-            logActivity('ADMIN_CHANGE', 'Changed ' + user.name + "'s admin level from " + oldLevel + ' to ' + level + ' (' + levelName + ')');
-            apiPost({ action: 'setAdminLevel', userId, level, hash: generateHash({ userId: currentUser.id, action: 'ADMIN_CHANGE', targetId: userId, ts: Date.now() }) });
-            saveToDB();
-            showToast(user.name + ' is now ' + levelName);
+            logActivity('ADMIN_CHANGE', `Changed ${user.name}'s admin level from ${oldLevel} to ${level} (${levelName})`);
+            showToast(`${user.name} is now ${levelName}`);
+            await apiPost('setAdminLevel', { userId, level });
         }
 
-        function deleteUser(userId) {
+        async function deleteUser(userId) {
             if (!isSuperAdmin(currentUser)) return;
             if (userId === currentUser.id) { showToast("You can't delete yourself!"); return; }
             const user = DB.users.find(u => u.id === userId);
             if (!user) return;
-            if (!confirm('Delete user "' + user.name + '"? This cannot be undone.')) return;
+            if (!confirm(`Delete user "${user.name}"? This cannot be undone.`)) return;
             DB.users = DB.users.filter(u => u.id !== userId);
-            logActivity('USER_DELETED', 'Deleted user: "' + user.name + '" (ID: ' + userId + ')');
-            apiPost({ action: 'deleteUser', userId, hash: generateHash({ userId: currentUser.id, action: 'USER_DELETED', targetId: userId, ts: Date.now() }) });
-            saveToDB();
-            showToast('User "' + user.name + '" deleted');
+            logActivity('USER_DELETED', `Deleted user: "${user.name}" (ID: ${userId})`);
+            showToast(`User "${user.name}" deleted`);
             renderAdminPanel();
+            await apiPost('deleteUser', { userId });
+        }
+
+        async function submitAddUser(event) {
+            event.preventDefault();
+            const form = event.target;
+            const maxId = Math.max(...DB.users.map(u => u.id));
+            const newId = maxId + 1;
+            const name = form.name.value;
+            const newUser = {
+                id: newId,
+                username: name.toLowerCase().replace(/\s+/g,'_') + newId,
+                name, email: form.email.value, state: form.state.value,
+                lga: form.lga.value, tier: 1, credibility: 10,
+                role: form.role.value,
+                adminLevel: parseInt(form.adminLevel.value) || 0,
+                education: form.education.value,
+                age: parseInt(form.age.value),
+                generated: false, // ensures login screen visibility
+                stats: { votes:0, reports:0, courses:0, contributions:0, commentsPosted:0 },
+                ccsBreakdown: { votes:0, reports:0, courses:0, comments:0, likes:0, bills:0 }
+            };
+            DB.users.push(newUser);
+            logActivity('USER_ADDED', `Added new user: "${name}" (${form.role.value})`);
+            form.closest('.modal-overlay').remove();
+            showToast(`User "${name}" added — will appear on login screen`);
+            renderAdminPanel();
+            await apiPost('addUser', { user: newUser });
+        }
+
+        async function handleAdminRequest(requestId, action) {
+            if (!isSuperAdmin(currentUser)) return;
+            const req = (DB.adminRequests || []).find(r => r.id === requestId);
+            if (!req) return;
+            req.status = action === 'approve' ? 'approved' : 'rejected';
+            if (action === 'approve') {
+                const user = DB.users.find(u => u.id === req.userId);
+                if (user) {
+                    user.adminLevel = 1;
+                    showToast(`${user.name} is now an Admin!`);
+                    logActivity('ADMIN_APPROVED', `Granted admin rights to ${user.name}`);
+                }
+            } else {
+                showToast('Request rejected.');
+                logActivity('ADMIN_REJECTED', `Rejected admin request from user ID ${req.userId}`);
+            }
+            renderAdminPanel();
+            await apiPost('handleAdminReq', { requestId, action, userId: req.userId });
+        }
+
+        async function requestAdminAccess(reason) {
+            if (!DB.adminRequests) DB.adminRequests = [];
+            const existing = DB.adminRequests.find(r => r.userId === currentUser.id && r.status === 'pending');
+            if (existing) { showToast('You already have a pending request.'); return; }
+            const req = { id: Date.now(), userId: currentUser.id, reason, status: 'pending', createdAt: new Date().toISOString() };
+            DB.adminRequests.push(req);
+            logActivity('ADMIN_REQUEST', `Requested admin access: "${reason}"`);
+            showToast('Admin access request submitted!');
+            await apiPost('adminRequest', { userId: currentUser.id, reason });
         }
 
         function showAddUserModal() {
@@ -4199,53 +4401,6 @@
                 </div>
             `;
             document.body.appendChild(modal);
-        }
-
-        function submitAddUser(event) {
-            event.preventDefault();
-            const form = event.target;
-            const newId = Math.max(...DB.users.map(u => u.id)) + 1;
-            const name = form.name.value;
-            const newUser = { id: newId, username: name.toLowerCase().replace(/\s+/g,'_') + newId, name, email: form.email.value, state: form.state.value, lga: form.lga.value, tier: 1, credibility: 10, role: form.role.value, adminLevel: parseInt(form.adminLevel.value) || 0, education: form.education.value, age: parseInt(form.age.value), generated: false, stats: { votes: 0, reports: 0, courses: 0, contributions: 0, commentsPosted: 0 } };
-            DB.users.push(newUser);
-            logActivity('USER_ADDED', 'Added new user: "' + name + '" (' + form.role.value + ')');
-            apiPost({ action: 'addUser', user: newUser, hash: generateHash({ userId: currentUser.id, action: 'USER_ADDED', name, ts: Date.now() }) });
-            saveToDB();
-            form.closest('.modal-overlay').remove();
-            showToast('User "' + name + '" added successfully');
-            renderAdminPanel();
-        }
-
-        function handleAdminRequest(requestId, action) {
-            if (!isSuperAdmin(currentUser)) return;
-            const req = (DB.adminRequests || []).find(r => r.id === requestId);
-            if (!req) return;
-            req.status = action === 'approve' ? 'approved' : 'rejected';
-            if (action === 'approve') {
-                const user = DB.users.find(u => u.id === req.userId);
-                if (user) {
-                    user.adminLevel = 1;
-                    showToast(user.name + ' is now an Admin!');
-                    logActivity('ADMIN_APPROVED', 'Granted admin rights to ' + user.name);
-                }
-            } else {
-                showToast('Request rejected.');
-                logActivity('ADMIN_REJECTED', 'Rejected admin request from user ID ' + req.userId);
-            }
-            apiPost({ action: 'handleAdminReq', requestId, action, userId: req.userId, hash: generateHash({ userId: currentUser.id, action: 'ADMIN_REQUEST_DECISION', requestId, ts: Date.now() }) });
-            saveToDB();
-            renderAdminPanel();
-        }
-
-        function requestAdminAccess(reason) {
-            if (!DB.adminRequests) DB.adminRequests = [];
-            const existing = DB.adminRequests.find(r => r.userId === currentUser.id && r.status === 'pending');
-            if (existing) { showToast('You already have a pending request.'); return; }
-            DB.adminRequests.push({ id: Date.now(), userId: currentUser.id, reason, status: 'pending', createdAt: new Date().toISOString() });
-            logActivity('ADMIN_REQUEST', 'Requested admin access: "' + reason + '"');
-            apiPost({ action: 'adminRequest', userId: currentUser.id, reason, hash: generateHash({ userId: currentUser.id, action: 'ADMIN_REQUEST', ts: Date.now() }) });
-            saveToDB();
-            showToast('Admin access request submitted!');
         }
 
         function showAdminRequestModal() {
@@ -4385,7 +4540,8 @@
             let taggedHtml = '';
             const lawmakers = report.taggedLawmakers || [];
             const officials = report.taggedOfficials || [];
-            if (lawmakers.length > 0 || officials.length > 0) {
+            const taggedUsers = report.taggedUsers || [];
+            if (lawmakers.length > 0 || officials.length > 0 || taggedUsers.length > 0) {
                 taggedHtml = `<div class="lawmakers-in-report">
                     ${lawmakers.map(l => `
                         <a href="${l['Profile URL'] || '#'}" target="_blank" class="lawmaker-chip" title="${l.chamber || ''} · ${l.Party || ''}">
@@ -4395,8 +4551,12 @@
                         <span class="lawmaker-chip" style="background:#f0fdf4;color:#15803d;border-color:#bbf7d0;" title="${o.fullName}">
                             ${o.avatar} ${o.name}
                         </span>`).join('')}
+                    ${taggedUsers.map(u => `
+                        <span class="lawmaker-chip" style="background:#f0f4ff;color:#1e4a6d;border-color:#c7d7f5;" title="${u.role || ''}">
+                            🧑 @${u.username || u.name}
+                        </span>`).join('')}
                 </div>
-                ${lawmakers.length > 0 || officials.length > 0 ? `<div style="font-size:0.72rem;color:var(--text-tertiary);margin-bottom:0.5rem;">📨 Tagged for accountability — these officials have been notified</div>` : ''}`;
+                <div style="font-size:0.72rem;color:var(--text-tertiary);margin-bottom:0.5rem;">📨 Tagged for accountability — officials and users notified</div>`;
             }
             
             return `
@@ -4544,11 +4704,13 @@
                 category: form.category.value,
                 description: form.description.value,
                 taggedLawmakers: [...currentTaggedLawmakers],
-                taggedOfficials: [...currentTaggedOfficials]
+                taggedOfficials: [...currentTaggedOfficials],
+                taggedUsers: [...currentTaggedUsers]
             };
             addReport(data);
             currentTaggedLawmakers = [];
             currentTaggedOfficials = [];
+            currentTaggedUsers = [];
             form.reset();
             renderCurrentView();
         }
@@ -4569,7 +4731,7 @@
                     showToast(`Progress updated: ${course.progress[currentUser.id]}%`);
                 }
                 
-                saveToDB();
+                updateStats();
                 renderCurrentView();
             }
         }
@@ -4827,10 +4989,17 @@
         function submitProfileEdit(event) {
             event.preventDefault();
             const form = event.target;
-            const updates = { name: form.name.value, email: form.email.value, state: form.state.value, lga: form.lga.value, age: parseInt(form.age.value), education: form.education.value };
+            const updates = {
+                name: form.name.value,
+                email: form.email.value,
+                state: form.state.value,
+                lga: form.lga.value,
+                age: parseInt(form.age.value),
+                education: form.education.value
+            };
             updateUserProfile(currentUser.id, updates);
             form.closest('.modal-overlay').remove();
-            showToast('Profile updated successfully!');
+            alert('Profile updated successfully!');
             renderCurrentView();
             document.getElementById('sidebarUserName').textContent = currentUser.name;
         }
@@ -4914,14 +5083,37 @@
         document.getElementById('darkModeDrawerToggle')?.addEventListener('click', darkModeToggle);
 
         // ==================== INITIALIZATION ====================
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Apply dark mode immediately (before fetch) so screen doesn't flash
             if (localStorage.getItem('darkMode') === 'true') {
                 document.body.classList.add('dark');
             }
-            // loadFromDB is async — it shows loading screen, fetches Sheets, then renders
-            loadFromDB();
-            // Debug function - accessible from console
+
+            // Load everything from Google Sheets
+            await loadFromDB();
+
+            if (!DB) return; // load failed — error screen already shown
+
+            // Ensure in-memory DB has required keys
+            migrateDB();
+
+            // Render the login screen from Sheets data
+            renderLoginScreen();
+
+            // Service Worker
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('data:text/javascript;base64,c2VsZi5hZGRFdmVudExpc3RlbmVyKCdpbnN0YWxsJywgZnVuY3Rpb24oZSkge2NvbnNvbGUubG9nKCdTVyBJbnN0YWxsZWQnKTt9KTs=')
+                    .catch(() => {});
+            }
+
+            // Debug helpers accessible from browser console
             window.resetDB = resetDatabase;
+            window.reloadDB = async function() {
+                _dbLoaded = false;
+                await loadFromDB();
+                renderLoginScreen();
+                console.log('DB reloaded from Sheets');
+            };
         });
     </script>
 </body>
