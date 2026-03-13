@@ -678,28 +678,31 @@
             bottom: 0;
             background: var(--bg-secondary);
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             z-index: 10000;
+            overflow-y: auto;
+            padding: 1rem 0;
         }
 
         .login-card {
             background: var(--bg-card);
             border-radius: 12px;
-            padding: 2rem;
+            padding: 1.5rem;
             box-shadow: var(--shadow-hover);
-            width: 90%;
-            max-width: 400px;
+            width: 92%;
+            max-width: 520px;
+            margin: auto;
         }
 
         .login-header {
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 1.25rem;
         }
 
         .login-logo {
-            width: 60px;
-            height: 60px;
+            width: 48px;
+            height: 48px;
             background: linear-gradient(135deg, var(--accent-blue), #326a97);
             border-radius: 12px;
             display: flex;
@@ -707,19 +710,19 @@
             justify-content: center;
             color: white;
             font-weight: 700;
-            font-size: 1.5rem;
-            margin: 0 auto 1rem;
+            font-size: 1.25rem;
+            margin: 0 auto 0.75rem;
         }
 
         .user-select-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
-            margin-top: 1rem;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.65rem;
+            margin-top: 0.75rem;
         }
 
         .user-select-card {
-            padding: 1rem;
+            padding: 0.65rem 0.4rem;
             border: 2px solid var(--border-light);
             border-radius: 8px;
             cursor: pointer;
@@ -733,8 +736,8 @@
         }
 
         .user-select-avatar {
-            width: 50px;
-            height: 50px;
+            width: 38px;
+            height: 38px;
             border-radius: 50%;
             background: linear-gradient(135deg, var(--accent-blue), #326a97);
             display: flex;
@@ -742,7 +745,13 @@
             justify-content: center;
             color: white;
             font-weight: 700;
-            margin: 0 auto 0.5rem;
+            font-size: 0.85rem;
+            margin: 0 auto 0.4rem;
+        }
+
+        /* On very small screens, drop to 2 columns */
+        @media (max-width: 360px) {
+            .user-select-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
         @media (max-width: 899px) {
@@ -753,6 +762,7 @@
 
             .left-sidebar, .right-sidebar {
                 display: none !important;
+                visibility: hidden !important;
             }
 
             .center-feed {
@@ -1376,6 +1386,12 @@
                     </div>
                 </div>
             </div>
+            <button id="darkModeDesktopToggle" style="display:flex;align-items:center;gap:0.75rem;background:none;border:1px solid var(--border-light);border-radius:12px;padding:0.7rem 1rem;cursor:pointer;color:var(--text-secondary);width:100%;margin-bottom:0.5rem;transition:all 0.2s;" onmouseenter="this.style.background='var(--border-light)'" onmouseleave="this.style.background='none'">
+                <svg width="18" height="18" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                </svg>
+                <span>Dark Mode</span>
+            </button>
             <button class="collapse-toggle" id="collapseBtn">
                 <svg width="20" height="20" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
@@ -2406,11 +2422,29 @@
             (DB.bills || []).forEach(function(bill) {
                 if (!bill.userVotes) bill.userVotes = {};
                 if (!bill.votes) bill.votes = { yes:0, no:0, abstain:0 };
+                if (typeof bill.votes.yes === 'undefined') bill.votes.yes = 0;
+                if (typeof bill.votes.no === 'undefined') bill.votes.no = 0;
+                if (typeof bill.votes.abstain === 'undefined') bill.votes.abstain = 0;
                 if (!bill.comments) bill.comments = [];
+                if (!bill.taggedLawmakers) bill.taggedLawmakers = [];
             });
             (DB.reports || []).forEach(function(report) {
                 if (!report.comments) report.comments = [];
                 if (!report.upvotes) report.upvotes = 0;
+                if (!report.taggedLawmakers) report.taggedLawmakers = [];
+                if (!report.taggedOfficials) report.taggedOfficials = [];
+                if (!report.taggedUsers) report.taggedUsers = [];
+            });
+            // Ensure every user has a stats and ccsBreakdown object
+            (DB.users || []).forEach(function(user) {
+                if (!user.stats) user.stats = { votes:0, reports:0, courses:0, contributions:0, commentsPosted:0 };
+                if (typeof user.stats.votes === 'undefined') user.stats.votes = 0;
+                if (typeof user.stats.reports === 'undefined') user.stats.reports = 0;
+                if (typeof user.stats.courses === 'undefined') user.stats.courses = 0;
+                if (typeof user.stats.contributions === 'undefined') user.stats.contributions = 0;
+                if (typeof user.stats.commentsPosted === 'undefined') user.stats.commentsPosted = 0;
+                if (!user.ccsBreakdown) user.ccsBreakdown = { votes:0, reports:0, courses:0, comments:0, likes:0, bills:0 };
+                if (!user.credibility) user.credibility = 0;
             });
         }
 
@@ -2630,8 +2664,9 @@
         }
 
         function updateStats() {
-            document.getElementById('totalBillsCount').textContent = DB.bills.length;
-            document.getElementById('activeUsersCount').textContent = DB.users.length;
+            if (!DB) return;
+            document.getElementById('totalBillsCount').textContent = (DB.bills||[]).length;
+            document.getElementById('activeUsersCount').textContent = (DB.users||[]).length;
             
             if (currentUser) {
                 document.getElementById('userCredibility').textContent = Math.round(currentUser.credibility);
@@ -2938,6 +2973,7 @@
 
         // ==================== RENDERING ====================
         function renderCurrentView() {
+            if (!DB || !currentUser) return; // Sheets data not loaded yet — safe exit
             const views = {
                 'feed': renderFeed,
                 'mirror': renderMirror,
@@ -3742,7 +3778,7 @@
                                 <div style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 0.5rem;">${rep.state} State</div>
                                 <div style="font-size: 0.875rem; margin-bottom: 1rem;">
                                     Bills Sponsored: ${DB.bills.filter(b => b.sponsorId === rep.id).length} | 
-                                    Votes Cast: ${rep.stats.votes}
+                                    Votes Cast: ${(rep.stats||{}).votes||0}
                                 </div>
                                 <div class="flex-between">
                                     <div>
@@ -3761,118 +3797,130 @@
         }
 
         function renderAnalytics() {
-            const totalVotes = DB.bills.reduce((sum, b) => sum + b.votes.yes + b.votes.no + b.votes.abstain, 0);
-            const totalYes = DB.bills.reduce((sum, b) => sum + b.votes.yes, 0);
-            const totalNo = DB.bills.reduce((sum, b) => sum + b.votes.no, 0);
-            const totalAbstain = DB.bills.reduce((sum, b) => sum + b.votes.abstain, 0);
-            const avgYes = totalVotes > 0 ? Math.round((totalYes / totalVotes) * 100) : 0;
-            const avgNo = totalVotes > 0 ? Math.round((totalNo / totalVotes) * 100) : 0;
+            try {
+            // Safe local refs — Sheets data may have undefined fields on any row
+            const bills   = DB.bills   || [];
+            const reports = DB.reports || [];
+            const users   = DB.users   || [];
+
+            // Vote totals — guard each bill's votes object
+            const voteSum  = b => ((b.votes||{}).yes||0) + ((b.votes||{}).no||0) + ((b.votes||{}).abstain||0);
+            const totalVotes   = bills.reduce((s,b) => s + voteSum(b), 0);
+            const totalYes     = bills.reduce((s,b) => s + ((b.votes||{}).yes||0), 0);
+            const totalNo      = bills.reduce((s,b) => s + ((b.votes||{}).no||0), 0);
+            const totalAbstain = bills.reduce((s,b) => s + ((b.votes||{}).abstain||0), 0);
+            const avgYes     = totalVotes > 0 ? Math.round((totalYes / totalVotes) * 100) : 0;
+            const avgNo      = totalVotes > 0 ? Math.round((totalNo  / totalVotes) * 100) : 0;
             const avgAbstain = 100 - avgYes - avgNo;
-            
+
             const totalActivityLogs = (DB.activityLog || []).length;
-            const totalComments = DB.bills.reduce((s,b) => s + b.comments.length, 0) + DB.reports.reduce((s,r) => s + r.comments.length, 0);
-            const avgCCS = DB.users.length > 0 ? Math.round(DB.users.reduce((s,u) => s + (u.credibility||0), 0) / DB.users.length) : 0;
-            
-            // Role counts for bar chart
+            const totalComments = bills.reduce((s,b)  => s + ((b.comments||[]).length), 0)
+                                + reports.reduce((s,r) => s + ((r.comments||[]).length), 0);
+            const avgCCS = users.length > 0
+                ? Math.round(users.reduce((s,u) => s + (Number(u.credibility)||0), 0) / users.length)
+                : 0;
+
+            // Role / education breakdowns
             const roleCounts = {};
-            DB.users.forEach(u => roleCounts[u.role] = (roleCounts[u.role] || 0) + 1);
-            const maxRole = Math.max(...Object.values(roleCounts));
-            
-            // Education counts
+            users.forEach(u => { if (u.role) roleCounts[u.role] = (roleCounts[u.role]||0) + 1; });
             const eduCounts = {};
-            DB.users.forEach(u => eduCounts[u.education] = (eduCounts[u.education] || 0) + 1);
+            users.forEach(u => { if (u.education) eduCounts[u.education] = (eduCounts[u.education]||0) + 1; });
 
             const feed = document.getElementById('mainFeed');
             feed.innerHTML = `
                 <div class="card">
                     <h2 style="margin-bottom: 1.5rem;">Analytics Dashboard</h2>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 0.5rem;">
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${DB.bills.length}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Active Bills</div>
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
+                            <div class="stat-value">${bills.length}</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Active Bills</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${DB.reports.length}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Citizen Reports</div>
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
+                            <div class="stat-value">${reports.length}</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Citizen Reports</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${DB.users.length}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Active Users</div>
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
+                            <div class="stat-value">${users.length}</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Active Users</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
                             <div class="stat-value">${totalVotes}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Total Votes</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Total Votes</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
                             <div class="stat-value">${totalComments}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Comments</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Comments</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
                             <div class="stat-value">${totalActivityLogs}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Auth Logs</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Auth Logs</div>
                         </div>
-                        <div style="text-align: center; padding: 1.25rem; background: var(--accent-soft); border-radius: 8px;">
+                        <div style="text-align:center;padding:1.25rem;background:var(--accent-soft);border-radius:8px;">
                             <div class="stat-value">${avgCCS}</div>
-                            <div style="color: var(--text-secondary); font-size: 0.8rem;">Avg CCS</div>
+                            <div style="color:var(--text-secondary);font-size:0.8rem;">Avg CCS</div>
                         </div>
                     </div>
                 </div>
 
                 <div class="card">
                     <h3 style="margin-bottom: 1rem;">Platform Vote Sentiment</h3>
-                    <div class="vote-sentiment-bar" style="height: 20px;">
-                        <div class="sentiment-yes" style="width: ${avgYes}%"></div>
-                        <div class="sentiment-no" style="width: ${avgNo}%"></div>
-                        <div class="sentiment-abstain" style="width: ${avgAbstain}%"></div>
+                    <div class="vote-sentiment-bar" style="height:20px;">
+                        <div class="sentiment-yes"     style="width:${avgYes}%"></div>
+                        <div class="sentiment-no"      style="width:${avgNo}%"></div>
+                        <div class="sentiment-abstain" style="width:${avgAbstain}%"></div>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 0.75rem; font-size: 0.875rem;">
-                        <span style="color: var(--vote-yes);">👍 Support: ${avgYes}% (${totalYes})</span>
-                        <span style="color: var(--vote-no);">👎 Oppose: ${avgNo}% (${totalNo})</span>
-                        <span style="color: var(--vote-abstain);">🤷 Abstain: ${avgAbstain}% (${totalAbstain})</span>
+                    <div style="display:flex;justify-content:space-between;margin-top:0.75rem;font-size:0.875rem;">
+                        <span style="color:var(--vote-yes);">👍 Support: ${avgYes}% (${totalYes})</span>
+                        <span style="color:var(--vote-no);">👎 Oppose: ${avgNo}% (${totalNo})</span>
+                        <span style="color:var(--vote-abstain);">🤷 Abstain: ${avgAbstain}% (${totalAbstain})</span>
                     </div>
                 </div>
 
                 <div class="card">
                     <h3 style="margin-bottom: 1rem;">User Roles Distribution</h3>
-                    ${Object.entries(roleCounts).map(([role, count]) => 
-                        renderAnalyticsStat(role, Math.round((count / DB.users.length) * 100), count)
-                    ).join('')}
+                    ${Object.keys(roleCounts).length > 0
+                        ? Object.entries(roleCounts).map(([role, count]) =>
+                            renderAnalyticsStat(role, Math.round((count / users.length) * 100), count)
+                          ).join('')
+                        : '<p style="color:var(--text-tertiary);">No data yet.</p>'}
                 </div>
 
                 <div class="card">
                     <h3 style="margin-bottom: 1rem;">Education Level Breakdown</h3>
-                    ${Object.entries(eduCounts).map(([edu, count]) => 
-                        renderAnalyticsStat(edu, Math.round((count / DB.users.length) * 100), count)
-                    ).join('')}
+                    ${Object.keys(eduCounts).length > 0
+                        ? Object.entries(eduCounts).map(([edu, count]) =>
+                            renderAnalyticsStat(edu, Math.round((count / users.length) * 100), count)
+                          ).join('')
+                        : '<p style="color:var(--text-tertiary);">No data yet.</p>'}
                 </div>
 
                 <div class="card">
                     <h3 style="margin-bottom: 1rem;">Report Categories</h3>
                     ${(() => {
                         const cats = {};
-                        DB.reports.forEach(r => cats[r.category] = (cats[r.category]||0)+1);
-                        const max = Math.max(...Object.values(cats), 1);
-                        return Object.entries(cats).map(([cat, count]) => 
-                            renderAnalyticsStat(`${getCategoryIcon(cat)} ${cat}`, Math.round((count/DB.reports.length)*100), count)
+                        reports.forEach(r => { if (r.category) cats[r.category] = (cats[r.category]||0)+1; });
+                        if (!Object.keys(cats).length) return '<p style="color:var(--text-tertiary);">No reports yet.</p>';
+                        return Object.entries(cats).map(([cat, count]) =>
+                            renderAnalyticsStat(`${getCategoryIcon(cat)} ${cat}`, Math.round((count / reports.length) * 100), count)
                         ).join('');
                     })()}
                 </div>
 
                 <div class="card">
                     <h3 style="margin-bottom: 1rem;">🏆 Civic Credibility Leaderboard</h3>
-                    ${[...DB.users]
-                        .sort((a, b) => b.credibility - a.credibility)
+                    ${[...users]
+                        .sort((a,b) => (Number(b.credibility)||0) - (Number(a.credibility)||0))
                         .slice(0, 5)
                         .map((user, index) => `
-                            <div style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: var(--accent-soft); border-radius: 8px; margin-bottom: 0.5rem;">
-                                <div style="font-weight: 700; font-size: 1.5rem; color: var(--accent-blue); width: 30px;">${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '#' + (index+1)}</div>
-                                <div style="flex: 1;">
-                                    <div style="font-weight: 600;">${user.name}</div>
-                                    <div style="font-size: 0.875rem; color: var(--text-secondary);">${user.role} · ${user.stats.contributions} contributions</div>
+                            <div style="display:flex;align-items:center;gap:1rem;padding:0.75rem;background:var(--accent-soft);border-radius:8px;margin-bottom:0.5rem;">
+                                <div style="font-weight:700;font-size:1.5rem;color:var(--accent-blue);width:30px;">${index===0?'🥇':index===1?'🥈':index===2?'🥉':'#'+(index+1)}</div>
+                                <div style="flex:1;">
+                                    <div style="font-weight:600;">${user.name}</div>
+                                    <div style="font-size:0.875rem;color:var(--text-secondary);">${user.role||'Citizen'} · ${(user.stats||{}).contributions||0} contributions</div>
                                 </div>
-                                <div style="text-align: right;">
-                                    <div style="font-weight: 700; color: var(--accent-blue);">${Math.round(user.credibility)}</div>
-                                    <div style="font-size: 0.8rem; color: var(--text-tertiary);">CCS</div>
+                                <div style="text-align:right;">
+                                    <div style="font-weight:700;color:var(--accent-blue);">${Math.round(Number(user.credibility)||0)}</div>
+                                    <div style="font-size:0.8rem;color:var(--text-tertiary);">CCS</div>
                                 </div>
                             </div>
                         `).join('')}
@@ -3883,14 +3931,22 @@
                     <div class="activity-log">
                         ${(DB.activityLog || []).slice(0,20).map(e => `
                             <div class="activity-entry">
-                                <span class="activity-hash">#${e.hash.substring(0,8)}</span>
-                                <span class="activity-text"><strong>${e.userName}</strong>: ${e.action} — ${e.details}</span>
+                                <span class="activity-hash">#${String(e.hash||'--------').substring(0,8)}</span>
+                                <span class="activity-text"><strong>${e.userName||'?'}</strong>: ${e.action||''} — ${e.details||''}</span>
                                 <span class="activity-ts">${formatTime(e.timestamp)}</span>
                             </div>
                         `).join('') || '<div style="color:var(--text-tertiary);padding:1rem;">No activity logged yet.</div>'}
                     </div>
                 </div>
             `;
+            } catch(err) {
+                const feed = document.getElementById('mainFeed');
+                if (feed) feed.innerHTML = `<div class="card" style="border:2px solid red;padding:2rem;">
+                    <h3 style="color:red;margin-bottom:1rem;">⚠️ Analytics Error (please screenshot this)</h3>
+                    <pre style="font-size:0.75rem;overflow:auto;white-space:pre-wrap;color:#333;">${err.stack || err.message || String(err)}</pre>
+                    <p style="margin-top:1rem;font-size:0.8rem;color:#666;">DB.bills=${DB&&DB.bills?DB.bills.length:'NULL'}, DB.users=${DB&&DB.users?DB.users.length:'NULL'}, DB.reports=${DB&&DB.reports?DB.reports.length:'NULL'}</p>
+                </div>`;
+            }
         }
 
         function renderProfile() {
@@ -3963,19 +4019,19 @@
                     <h3 style="margin-bottom: 1.5rem;">Contribution Statistics</h3>
                     <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
                         <div style="text-align: center; padding: 1.5rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${currentUser.stats.votes}</div>
+                            <div class="stat-value">${(currentUser.stats||{}).votes||0}</div>
                             <div style="color: var(--text-secondary); font-size: 0.875rem;">Bills Voted On</div>
                         </div>
                         <div style="text-align: center; padding: 1.5rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${currentUser.stats.reports}</div>
+                            <div class="stat-value">${(currentUser.stats||{}).reports||0}</div>
                             <div style="color: var(--text-secondary); font-size: 0.875rem;">Reports Filed</div>
                         </div>
                         <div style="text-align: center; padding: 1.5rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${currentUser.stats.courses}</div>
+                            <div class="stat-value">${(currentUser.stats||{}).courses||0}</div>
                             <div style="color: var(--text-secondary); font-size: 0.875rem;">Courses Completed</div>
                         </div>
                         <div style="text-align: center; padding: 1.5rem; background: var(--accent-soft); border-radius: 8px;">
-                            <div class="stat-value">${currentUser.stats.contributions}</div>
+                            <div class="stat-value">${(currentUser.stats||{}).contributions||0}</div>
                             <div style="color: var(--text-secondary); font-size: 0.875rem;">Total Contributions</div>
                         </div>
                     </div>
@@ -4047,7 +4103,7 @@
                         : `<div class="activity-log">
                             ${activityLog.slice(0,50).map(e => `
                                 <div class="activity-entry">
-                                    <span class="activity-hash">#${e.hash.substring(0,8)}</span>
+                                    <span class="activity-hash">#${String(e.hash||'--------').substring(0,8)}</span>
                                     <span class="activity-text">${e.action}: ${e.details}</span>
                                     <span class="activity-ts">${formatTime(e.timestamp)}</span>
                                 </div>
@@ -4439,10 +4495,13 @@
             // Read this user's vote from the bill's own userVotes map
             const userVote = currentUser && bill.userVotes ? bill.userVotes[String(currentUser.id)] : null;
             const showComments = activeCommentSections.has(`bill-${billId}`);
-            
-            const totalVotes = bill.votes.yes + bill.votes.no + bill.votes.abstain;
-            const yesPercent = totalVotes > 0 ? Math.round((bill.votes.yes / totalVotes) * 100) : 0;
-            const noPercent = totalVotes > 0 ? Math.round((bill.votes.no / totalVotes) * 100) : 0;
+
+            // Guard votes — Sheets rows may arrive without this object
+            const votes = bill.votes || { yes: 0, no: 0, abstain: 0 };
+            bill.votes = votes; // ensure template references are safe
+            const totalVotes = (votes.yes||0) + (votes.no||0) + (votes.abstain||0);
+            const yesPercent = totalVotes > 0 ? Math.round(((votes.yes||0) / totalVotes) * 100) : 0;
+            const noPercent  = totalVotes > 0 ? Math.round(((votes.no||0)  / totalVotes) * 100) : 0;
             const abstainPercent = 100 - yesPercent - noPercent;
             
             const taggedHtml = bill.taggedLawmakers && bill.taggedLawmakers.length > 0
@@ -4503,17 +4562,17 @@
                         <button class="vote-btn ${userVote === 'yes' ? 'voted-yes' : ''}" onclick="vote(${billId}, 'yes')">
                             <span class="vote-icon">${userVote === 'yes' ? '✅' : '👍'}</span>
                             <span class="vote-label">Support</span>
-                            <span class="vote-count">${bill.votes.yes}${totalVotes > 0 ? ` · ${yesPercent}%` : ''}</span>
+                            <span class="vote-count">${votes.yes||0}${totalVotes > 0 ? ` · ${yesPercent}%` : ''}</span>
                         </button>
                         <button class="vote-btn ${userVote === 'no' ? 'voted-no' : ''}" onclick="vote(${billId}, 'no')">
                             <span class="vote-icon">${userVote === 'no' ? '❌' : '👎'}</span>
                             <span class="vote-label">Oppose</span>
-                            <span class="vote-count">${bill.votes.no}${totalVotes > 0 ? ` · ${noPercent}%` : ''}</span>
+                            <span class="vote-count">${votes.no||0}${totalVotes > 0 ? ` · ${noPercent}%` : ''}</span>
                         </button>
                         <button class="vote-btn ${userVote === 'abstain' ? 'voted-abstain' : ''}" onclick="vote(${billId}, 'abstain')">
                             <span class="vote-icon">${userVote === 'abstain' ? '🔄' : '🤷'}</span>
                             <span class="vote-label">Abstain</span>
-                            <span class="vote-count">${bill.votes.abstain}${totalVotes > 0 ? ` · ${abstainPercent}%` : ''}</span>
+                            <span class="vote-count">${votes.abstain||0}${totalVotes > 0 ? ` · ${abstainPercent}%` : ''}</span>
                         </button>
                     </div>
                     <div class="vote-meta">
@@ -4580,7 +4639,7 @@
                             ${isUpvoted ? '❤ ' : '♡ '}${report.upvotes}
                         </button>
                         <button class="action-btn" onclick="toggleComments('report', ${report.id})">
-                            💬 ${report.comments.length}
+                            💬 ${(report.comments||[]).length}
                         </button>
                         <button class="action-btn" onclick="shareReport(${report.id})">
                             🔗 Share
@@ -4598,7 +4657,7 @@
 
             return `
                 <div class="comments-section">
-                    <h4 style="margin-bottom: 1rem;">Comments (${comments.length})</h4>
+                    <h4 style="margin-bottom: 1rem;">Comments (${(comments||[]).length})</h4>
                     ${comments.map(c => `
                         <div class="comment">
                             <div class="comment-header">
@@ -4750,17 +4809,20 @@
 
         function updateTrendingWidget() {
             const widget = document.getElementById('trendingWidget');
-            if (!widget) return;
+            if (!widget || !DB) return;
 
-            const trending = DB.bills
-                .sort((a, b) => (b.votes.yes + b.votes.no + b.votes.abstain) - (a.votes.yes + a.votes.no + a.votes.abstain))
+            const trending = [...(DB.bills||[])]
+                .sort((a, b) => {
+                    const bv = b.votes||{}, av = a.votes||{};
+                    return ((bv.yes||0)+(bv.no||0)+(bv.abstain||0)) - ((av.yes||0)+(av.no||0)+(av.abstain||0));
+                })
                 .slice(0, 5);
 
             widget.innerHTML = trending.map(bill => `
                 <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-light); cursor: pointer;" onclick="setActiveView('mirror')">
                     <div style="font-weight: 600; margin-bottom: 0.25rem;">${bill.title}</div>
                     <div style="font-size: 0.875rem; color: var(--text-secondary);">
-                        ${bill.votes.yes + bill.votes.no + bill.votes.abstain} votes
+                        ${((bill.votes||{}).yes||0) + ((bill.votes||{}).no||0) + ((bill.votes||{}).abstain||0)} votes
                     </div>
                 </div>
             `).join('');
@@ -5081,6 +5143,7 @@
 
         document.getElementById('darkModeToggleMobile')?.addEventListener('click', darkModeToggle);
         document.getElementById('darkModeDrawerToggle')?.addEventListener('click', darkModeToggle);
+        document.getElementById('darkModeDesktopToggle')?.addEventListener('click', darkModeToggle);
 
         // ==================== INITIALIZATION ====================
         document.addEventListener('DOMContentLoaded', async function() {
