@@ -1660,9 +1660,9 @@
     </div>
 
     <!-- Media Lightbox -->
-    <div id="mediaLightbox" style="display:none;position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;" onclick="this.style.display='none'">
-        <div id="mediaLightboxContent" style="max-width:90vw;max-height:90vh;"></div>
-        <button style="position:absolute;top:1rem;right:1.25rem;background:rgba(255,255,255,0.15);border:none;color:white;border-radius:8px;padding:0.4rem 0.9rem;font-size:1.2rem;cursor:pointer;" onclick="document.getElementById('mediaLightbox').style.display='none'">&#x2715;</button>
+    <div id="mediaLightbox" style="display:none;position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;cursor:pointer;" onclick="if(event.target===this)this.style.display='none'">
+        <div id="mediaLightboxContent" style="max-width:92vw;max-height:92vh;display:flex;align-items:center;justify-content:center;cursor:default;" onclick="event.stopPropagation()"></div>
+        <button style="position:absolute;top:1rem;right:1.25rem;background:rgba(255,255,255,0.2);border:none;color:white;border-radius:8px;padding:0.5rem 1rem;font-size:1.2rem;cursor:pointer;z-index:1;" onclick="document.getElementById('mediaLightbox').style.display='none'">&#x2715; Close</button>
     </div>
 
     <script>
@@ -2369,11 +2369,18 @@
         const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbxwMlowUTgXxGGxxgPl_B64n6FIlJiruLfrIVGQUeUa7EaD534qGM8iT9LKoRF6Jo8ehg/exec';
 
         // ==================== GOOGLE DRIVE MEDIA CONFIG ====================
-        // Public Drive folder for media uploads (anyone with link can upload via Apps Script proxy)
         const DRIVE_FOLDER_ID = '1oDR3JmDdrJbsIpaVSASjTwpflfUKmBCX';
-        // Drive direct link base — works for publicly shared files
-        const DRIVE_VIEW_BASE = 'https://drive.google.com/thumbnail?sz=w400&id=';
+
+        // lh3.googleusercontent.com/d/FILE_ID — the only URL format that reliably
+        // loads Drive images in <img> tags without CORS issues, same as Ezie family tree.
+        // Works for any publicly shared file (Anyone with link = Viewer).
+        const DRIVE_VIEW_BASE  = 'https://lh3.googleusercontent.com/d/';
+        // Videos still use Drive's /preview iframe — lh3 is images only
         const DRIVE_VIDEO_BASE = 'https://drive.google.com/file/d/';
+
+        function driveImgUrl(fileId) {
+            return 'https://lh3.googleusercontent.com/d/' + fileId;
+        }
 
         // In-memory DB — populated from Sheets on load, kept in sync on every action
         let DB = null;
@@ -2655,13 +2662,16 @@
             return `<div class="report-media-grid">
                 ${mediaItems.map(m => {
                     if (m.fileType === 'video') {
-                        return `<div class="report-media-item" onclick="openMediaLightbox('video','${m.driveId}')">
-                            <video src="${DRIVE_VIDEO_BASE}${m.driveId}/preview" muted playsinline style="pointer-events:none;"></video>
-                            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);color:white;font-size:1.8rem;pointer-events:none;">▶</div>
+                        return `<div class="report-media-item" onclick="openMediaLightbox('video','${m.driveId}')" style="position:relative;background:#111;cursor:pointer;">
+                            <iframe src="${DRIVE_VIDEO_BASE}${m.driveId}/preview" style="width:100%;height:100%;border:none;pointer-events:none;" allowfullscreen></iframe>
+                            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:white;font-size:2.5rem;pointer-events:none;background:rgba(0,0,0,0.3);">▶</div>
                         </div>`;
                     } else {
-                        return `<div class="report-media-item" onclick="openMediaLightbox('image','${m.driveId}')">
-                            <img src="${DRIVE_VIEW_BASE}${m.driveId}" alt="report media" loading="lazy" onerror="this.parentElement.style.display='none'">
+                        // lh3.googleusercontent.com/d/ loads cleanly in <img> for public Drive files
+                        return `<div class="report-media-item" onclick="openMediaLightbox('image','${m.driveId}')" style="cursor:pointer;">
+                            <img src="${DRIVE_VIEW_BASE}${m.driveId}" alt="report media" loading="lazy"
+                                style="width:100%;height:100%;object-fit:cover;display:block;"
+                                onerror="this.src='';this.style.background='#2d374d';this.alt='Image unavailable';">
                         </div>`;
                     }
                 }).join('')}
@@ -2669,14 +2679,27 @@
         }
 
         function openMediaLightbox(type, driveId) {
-            const box = document.getElementById('mediaLightbox');
+            const box     = document.getElementById('mediaLightbox');
             const content = document.getElementById('mediaLightboxContent');
             if (!box || !content) return;
+
             if (type === 'video') {
-                content.innerHTML = `<iframe src="${DRIVE_VIDEO_BASE}${driveId}/preview" width="640" height="400" allow="autoplay" style="border:none;max-width:90vw;max-height:80vh;border-radius:8px;" allowfullscreen></iframe>`;
+                // Videos: iframe /preview
+                content.innerHTML = `
+                    <iframe src="${DRIVE_VIDEO_BASE}${driveId}/preview"
+                        style="border:none;border-radius:10px;background:#000;display:block;max-width:90vw;max-height:82vh;"
+                        width="854" height="480" allow="autoplay" allowfullscreen>
+                    </iframe>`;
             } else {
-                content.innerHTML = `<img src="https://drive.google.com/uc?export=view&id=${driveId}" style="max-width:90vw;max-height:86vh;border-radius:8px;display:block;" onclick="event.stopPropagation()">`;
+                // Images: lh3.googleusercontent.com/d/ — same URL that works in thumbnails,
+                // just shown at full size. No iframe needed, no CORS issues.
+                content.innerHTML = `
+                    <img src="${DRIVE_VIEW_BASE}${driveId}"
+                        style="max-width:88vw;max-height:86vh;border-radius:10px;display:block;cursor:default;"
+                        onclick="event.stopPropagation()"
+                        onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<p style=color:white>Image could not load</p>')">`;
             }
+
             box.style.display = 'flex';
         }
 
