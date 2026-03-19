@@ -154,6 +154,111 @@
             border-radius: 8px;
         }
 
+        /* ===== PUSH NOTIFICATION BANNER ===== */
+        #pushNotifBanner {
+            position: fixed;
+            top: -120px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 99999;
+            background: linear-gradient(135deg, #1e4a6d, #326a97);
+            color: white;
+            border-radius: 14px;
+            padding: 1rem 1.25rem 1rem 1.5rem;
+            min-width: 300px;
+            max-width: 520px;
+            width: calc(100vw - 2rem);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.28);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            transition: top 0.45s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        #pushNotifBanner.visible { top: 1rem; }
+        #pushNotifBanner .notif-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: 1px; }
+        #pushNotifBanner .notif-body { flex: 1; }
+        #pushNotifBanner .notif-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.75; margin-bottom: 0.2rem; }
+        #pushNotifBanner .notif-text { font-size: 0.95rem; line-height: 1.45; }
+        #pushNotifBanner .notif-close { background: rgba(255,255,255,0.18); border: none; color: white; border-radius: 8px; padding: 0.35rem 0.6rem; cursor: pointer; font-size: 1rem; flex-shrink: 0; transition: background 0.2s; }
+        #pushNotifBanner .notif-close:hover { background: rgba(255,255,255,0.32); }
+        #pushNotifBanner .notif-progress { position: absolute; bottom: 0; left: 0; height: 3px; background: rgba(255,255,255,0.5); border-radius: 0 0 14px 14px; transition: width linear; }
+
+        /* ===== MEDIA UPLOAD WIDGET ===== */
+        .media-upload-zone {
+            border: 2px dashed var(--border-light);
+            border-radius: 10px;
+            padding: 1.25rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            background: var(--bg-secondary);
+        }
+        .media-upload-zone:hover, .media-upload-zone.drag-over {
+            border-color: var(--accent-blue);
+            background: var(--accent-soft);
+        }
+        .media-upload-zone input[type="file"] { display: none; }
+        .media-preview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        .media-thumb {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            aspect-ratio: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+        }
+        .media-thumb img, .media-thumb video {
+            width: 100%; height: 100%; object-fit: cover; display: block;
+        }
+        .media-thumb .remove-media {
+            position: absolute; top: 3px; right: 3px;
+            background: rgba(0,0,0,0.6); color: white; border: none;
+            border-radius: 50%; width: 20px; height: 20px; font-size: 0.7rem;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            line-height: 1;
+        }
+        .media-thumb .upload-spinner {
+            position: absolute; inset: 0; background: rgba(0,0,0,0.45);
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 1.5rem;
+        }
+        .media-upload-status {
+            font-size: 0.78rem; color: var(--text-tertiary); margin-top: 0.4rem;
+        }
+        /* Report card media display */
+        .report-media-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .report-media-item {
+            border-radius: 8px; overflow: hidden; aspect-ratio: 1;
+            background: var(--bg-secondary); cursor: pointer;
+            border: 1px solid var(--border-light);
+        }
+        .report-media-item img, .report-media-item video {
+            width: 100%; height: 100%; object-fit: cover; display: block;
+        }
+        /* Profile picture */
+        .profile-pic-wrap {
+            position: relative; display: inline-block;
+        }
+        .profile-pic-wrap .change-pic-btn {
+            position: absolute; bottom: 0; right: 0;
+            background: var(--accent-blue); color: white; border: 2px solid var(--bg-primary);
+            border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 0.85rem;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .user-avatar img {
+            width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+        }
+
         .user-avatar {
             width: 40px;
             height: 40px;
@@ -1543,6 +1648,23 @@
     <button class="fab" id="createFab" title="Create New">+</button>
     <div class="toast" id="toastMsg"></div>
 
+    <!-- Push Notification Banner -->
+    <div id="pushNotifBanner" role="alert" aria-live="assertive">
+        <div class="notif-icon">📢</div>
+        <div class="notif-body">
+            <div class="notif-label">OpenStateNG · Announcement</div>
+            <div class="notif-text" id="pushNotifText"></div>
+        </div>
+        <button class="notif-close" onclick="dismissPushNotif()" title="Dismiss">&#x2715;</button>
+        <div class="notif-progress" id="pushNotifProgress" style="width:100%"></div>
+    </div>
+
+    <!-- Media Lightbox -->
+    <div id="mediaLightbox" style="display:none;position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;" onclick="this.style.display='none'">
+        <div id="mediaLightboxContent" style="max-width:90vw;max-height:90vh;"></div>
+        <button style="position:absolute;top:1rem;right:1.25rem;background:rgba(255,255,255,0.15);border:none;color:white;border-radius:8px;padding:0.4rem 0.9rem;font-size:1.2rem;cursor:pointer;" onclick="document.getElementById('mediaLightbox').style.display='none'">&#x2715;</button>
+    </div>
+
     <script>
         // ==================== DATABASE ====================
         const DEFAULT_DB = {
@@ -2246,6 +2368,13 @@
         // ==================== SHEETS API CONFIG ====================
         const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbxwMlowUTgXxGGxxgPl_B64n6FIlJiruLfrIVGQUeUa7EaD534qGM8iT9LKoRF6Jo8ehg/exec';
 
+        // ==================== GOOGLE DRIVE MEDIA CONFIG ====================
+        // Public Drive folder for media uploads (anyone with link can upload via Apps Script proxy)
+        const DRIVE_FOLDER_ID = '1oDR3JmDdrJbsIpaVSASjTwpflfUKmBCX';
+        // Drive direct link base — works for publicly shared files
+        const DRIVE_VIEW_BASE = 'https://drive.google.com/thumbnail?sz=w400&id=';
+        const DRIVE_VIDEO_BASE = 'https://drive.google.com/file/d/';
+
         // In-memory DB — populated from Sheets on load, kept in sync on every action
         let DB = null;
         let currentUser = null;
@@ -2266,6 +2395,323 @@
             t.textContent = msg;
             t.classList.add('show');
             setTimeout(() => t.classList.remove('show'), duration);
+        }
+
+        // ==================== PUSH NOTIFICATION SYSTEM ====================
+        let _lastSeenNotifId = localStorage.getItem('osng_lastNotifId') || '';
+        let _notifPollInterval = null;
+        let _notifDismissTimer = null;
+
+        async function checkForPushNotification() {
+            try {
+                const data = await apiGet({ action: 'getNotification' });
+                if (data && data.id && data.message && data.id !== _lastSeenNotifId) {
+                    showPushNotif(data.message, data.id);
+                }
+            } catch(e) { /* silent fail */ }
+        }
+
+        function showPushNotif(message, id) {
+            const banner = document.getElementById('pushNotifBanner');
+            const textEl = document.getElementById('pushNotifText');
+            const progress = document.getElementById('pushNotifProgress');
+            if (!banner || !textEl) return;
+            textEl.textContent = message;
+            banner.classList.add('visible');
+            // Animated progress bar countdown (10 seconds)
+            if (progress) {
+                progress.style.transition = 'none';
+                progress.style.width = '100%';
+                setTimeout(() => {
+                    progress.style.transition = 'width 10s linear';
+                    progress.style.width = '0%';
+                }, 50);
+            }
+            if (_notifDismissTimer) clearTimeout(_notifDismissTimer);
+            _notifDismissTimer = setTimeout(() => dismissPushNotif(), 10000);
+            _lastSeenNotifId = id;
+            localStorage.setItem('osng_lastNotifId', id);
+        }
+
+        function dismissPushNotif() {
+            const banner = document.getElementById('pushNotifBanner');
+            if (banner) banner.classList.remove('visible');
+            if (_notifDismissTimer) { clearTimeout(_notifDismissTimer); _notifDismissTimer = null; }
+        }
+
+        function startNotifPolling() {
+            checkForPushNotification(); // check immediately on login
+            if (_notifPollInterval) clearInterval(_notifPollInterval);
+            _notifPollInterval = setInterval(checkForPushNotification, 60000); // check every 60s
+        }
+
+        // ==================== MEDIA UPLOAD ENGINE (Google Drive via AppScript) ====================
+        // Files are uploaded through your AppScript endpoint which proxies to Drive.
+        // Each file is sent as base64 so no OAuth token is needed on the client.
+        // Uploads happen in parallel — one failure doesn't block others.
+
+        const MAX_MEDIA_PER_REPORT = 4;
+        let _pendingMediaFiles = []; // [{file, localUrl, fileType, driveId, uploading, error}]
+
+        function initMediaUploadZone(containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            _pendingMediaFiles = [];
+            renderMediaPreview(containerId);
+
+            const zone = container.querySelector('.media-upload-zone');
+            if (!zone) return;
+
+            zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+            zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+            zone.addEventListener('drop', e => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                handleMediaFiles(Array.from(e.dataTransfer.files), containerId);
+            });
+        }
+
+        function onMediaFileSelect(input, containerId) {
+            handleMediaFiles(Array.from(input.files), containerId);
+            input.value = ''; // reset so same file can be re-added after removal
+        }
+
+        function handleMediaFiles(files, containerId) {
+            const remaining = MAX_MEDIA_PER_REPORT - _pendingMediaFiles.length;
+            if (remaining <= 0) { showToast(`Maximum ${MAX_MEDIA_PER_REPORT} media files per report`); return; }
+
+            let skipped = 0;
+            const validFiles = [];
+            files.forEach(file => {
+                const isImage = file.type.startsWith('image/');
+                const isVideo = file.type.startsWith('video/');
+                if (!isImage && !isVideo) {
+                    showToast(`"${file.name}" is not a supported image or video format`);
+                    skipped++;
+                    return;
+                }
+                if (file.size > MAX_MEDIA_FILE_BYTES) {
+                    const mb = (file.size / 1024 / 1024).toFixed(1);
+                    showToast(`"${file.name}" is ${mb} MB — max 4 MB per file`);
+                    skipped++;
+                    return;
+                }
+                validFiles.push(file);
+            });
+
+            const allowed = validFiles.slice(0, remaining);
+            if (validFiles.length > remaining) {
+                showToast(`Only ${remaining} more file(s) can be added (max ${MAX_MEDIA_PER_REPORT})`);
+            }
+
+            allowed.forEach(file => {
+                const entry = {
+                    file, localUrl: URL.createObjectURL(file),
+                    fileType: file.type.startsWith('video/') ? 'video' : 'image',
+                    driveId: null, uploading: true, error: false, errorMsg: ''
+                };
+                _pendingMediaFiles.push(entry);
+                renderMediaPreview(containerId);
+                uploadMediaToDrive(entry, containerId);
+            });
+        }
+
+        // Max file size per upload: 4MB (base64 inflates ~33%, so ~5.3MB JSON payload — safe for Apps Script)
+        const MAX_MEDIA_FILE_BYTES = 4 * 1024 * 1024; // 4MB
+
+        async function uploadMediaToDrive(entry, containerId) {
+            try {
+                // ── Client-side size guard ──────────────────────────────────────
+                if (entry.file.size > MAX_MEDIA_FILE_BYTES) {
+                    const mb = (entry.file.size / 1024 / 1024).toFixed(1);
+                    entry.uploading = false;
+                    entry.error = true;
+                    entry.errorMsg = `File too large (${mb} MB) — max 4 MB per file`;
+                    console.warn('Upload blocked: file too large', entry.file.name, mb + 'MB');
+                    renderMediaPreview(containerId);
+                    return;
+                }
+
+                // ── Read as base64 ──────────────────────────────────────────────
+                const base64 = await fileToBase64(entry.file);
+
+                // ── Use a dedicated fetch (not apiPost) so we control timeout ───
+                // Apps Script uploads bypass the shared script lock for speed.
+                const body = JSON.stringify({
+                    action: 'uploadMedia',
+                    fileName: entry.file.name,
+                    mimeType: entry.file.type,
+                    base64Data: base64,
+                    folderId: DRIVE_FOLDER_ID
+                });
+
+                const res = await fetch(SHEET_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body
+                });
+
+                // Apps Script sometimes returns a redirect (302) before JSON — follow it
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                }
+
+                const text = await res.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch(parseErr) {
+                    throw new Error('Invalid JSON from server: ' + text.slice(0, 200));
+                }
+
+                if (data && data.fileId) {
+                    entry.driveId = data.fileId;
+                    entry.uploading = false;
+                    console.log('Upload OK:', entry.file.name, '→', data.fileId);
+                } else {
+                    entry.uploading = false;
+                    entry.error = true;
+                    entry.errorMsg = data.error || 'Upload returned no fileId';
+                    console.error('Drive upload failed for', entry.file.name, ':', data);
+                }
+
+            } catch(e) {
+                entry.uploading = false;
+                entry.error = true;
+                entry.errorMsg = e.message;
+                console.error('Upload exception for', entry.file.name, ':', e);
+            }
+            renderMediaPreview(containerId);
+        }
+
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function removeMediaFile(index, containerId) {
+            if (_pendingMediaFiles[index]) {
+                URL.revokeObjectURL(_pendingMediaFiles[index].localUrl);
+                _pendingMediaFiles.splice(index, 1);
+            }
+            renderMediaPreview(containerId);
+        }
+
+        function renderMediaPreview(containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const grid = container.querySelector('.media-preview-grid');
+            const status = container.querySelector('.media-upload-status');
+            if (!grid) return;
+
+            grid.innerHTML = _pendingMediaFiles.map((m, i) => `
+                <div class="media-thumb" style="position:relative;">
+                    ${m.fileType === 'video'
+                        ? `<video src="${m.localUrl}" muted playsinline></video>`
+                        : `<img src="${m.localUrl}" alt="media ${i+1}">`
+                    }
+                    ${m.uploading ? `<div class="upload-spinner">⟳</div>` : ''}
+                    ${m.error ? `<div class="upload-spinner" style="background:rgba(160,0,0,0.72);font-size:0.65rem;padding:0.25rem;text-align:center;line-height:1.3;">${m.errorMsg ? m.errorMsg.slice(0,40) : 'Upload failed'}</div>` : ''}
+                    <button class="remove-media" onclick="removeMediaFile(${i}, '${containerId}')" type="button" title="Remove">✕</button>
+                </div>
+            `).join('');
+
+            const count = _pendingMediaFiles.length;
+            const uploading = _pendingMediaFiles.filter(m => m.uploading).length;
+            const errors = _pendingMediaFiles.filter(m => m.error).length;
+            const ready = _pendingMediaFiles.filter(m => m.driveId && !m.error).length;
+
+            if (status) {
+                if (count === 0) {
+                    status.textContent = '';
+                    status.style.color = '';
+                } else if (uploading > 0) {
+                    status.textContent = `⟳ Uploading ${uploading} file(s)… (${count}/${MAX_MEDIA_PER_REPORT})`;
+                    status.style.color = 'var(--accent-blue)';
+                } else if (errors > 0) {
+                    // Show the first error message prominently
+                    const firstError = _pendingMediaFiles.find(m => m.error);
+                    status.textContent = `✗ ${firstError?.errorMsg || 'Upload failed'} — remove and retry`;
+                    status.style.color = 'var(--vote-no)';
+                } else {
+                    status.textContent = `✓ ${ready}/${MAX_MEDIA_PER_REPORT} file(s) uploaded and ready`;
+                    status.style.color = 'var(--vote-yes)';
+                }
+            }
+        }
+
+        function getUploadedMediaIds() {
+            return _pendingMediaFiles
+                .filter(m => m.driveId && !m.error)
+                .map(m => ({ driveId: m.driveId, fileType: m.fileType }));
+        }
+
+        function renderReportMediaDisplay(mediaItems) {
+            if (!mediaItems || mediaItems.length === 0) return '';
+            return `<div class="report-media-grid">
+                ${mediaItems.map(m => {
+                    if (m.fileType === 'video') {
+                        return `<div class="report-media-item" onclick="openMediaLightbox('video','${m.driveId}')">
+                            <video src="${DRIVE_VIDEO_BASE}${m.driveId}/preview" muted playsinline style="pointer-events:none;"></video>
+                            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);color:white;font-size:1.8rem;pointer-events:none;">▶</div>
+                        </div>`;
+                    } else {
+                        return `<div class="report-media-item" onclick="openMediaLightbox('image','${m.driveId}')">
+                            <img src="${DRIVE_VIEW_BASE}${m.driveId}" alt="report media" loading="lazy" onerror="this.parentElement.style.display='none'">
+                        </div>`;
+                    }
+                }).join('')}
+            </div>`;
+        }
+
+        function openMediaLightbox(type, driveId) {
+            const box = document.getElementById('mediaLightbox');
+            const content = document.getElementById('mediaLightboxContent');
+            if (!box || !content) return;
+            if (type === 'video') {
+                content.innerHTML = `<iframe src="${DRIVE_VIDEO_BASE}${driveId}/preview" width="640" height="400" allow="autoplay" style="border:none;max-width:90vw;max-height:80vh;border-radius:8px;" allowfullscreen></iframe>`;
+            } else {
+                content.innerHTML = `<img src="https://drive.google.com/uc?export=view&id=${driveId}" style="max-width:90vw;max-height:86vh;border-radius:8px;display:block;" onclick="event.stopPropagation()">`;
+            }
+            box.style.display = 'flex';
+        }
+
+        // ==================== PROFILE PICTURE UPLOAD ====================
+        async function uploadProfilePicture(file) {
+            if (!file || !file.type.startsWith('image/')) { showToast('Please select an image file'); return null; }
+            try {
+                showToast('Uploading profile picture…');
+                const base64 = await fileToBase64(file);
+                const res = await apiPost('uploadMedia', {
+                    fileName: 'profilepic_' + currentUser.id + '_' + Date.now() + '.' + file.name.split('.').pop(),
+                    mimeType: file.type,
+                    base64Data: base64,
+                    folderId: DRIVE_FOLDER_ID
+                });
+                if (res && res.fileId) {
+                    return res.fileId;
+                } else {
+                    showToast('Upload failed — try again');
+                    return null;
+                }
+            } catch(e) {
+                showToast('Upload error');
+                return null;
+            }
+        }
+
+        function renderUserAvatar(user, size = 44, fontSize = '1rem') {
+            const initials = (user.name || '?').split(' ').map(n => n[0]).join('');
+            if (user.profilePicId) {
+                return `<div class="user-avatar" style="width:${size}px;height:${size}px;padding:0;overflow:hidden;">
+                    <img src="${DRIVE_VIEW_BASE}${user.profilePicId}" alt="${initials}" onerror="this.parentElement.textContent='${initials}'">
+                </div>`;
+            }
+            return `<div class="user-avatar" style="width:${size}px;height:${size}px;font-size:${fontSize};">${initials}</div>`;
         }
 
         // ==================== BLOCKCHAIN-STYLE ACTIVITY LOG ====================
@@ -2434,6 +2880,7 @@
                 if (!report.taggedLawmakers) report.taggedLawmakers = [];
                 if (!report.taggedOfficials) report.taggedOfficials = [];
                 if (!report.taggedUsers) report.taggedUsers = [];
+                if (!report.mediaItems) report.mediaItems = [];
             });
             // Ensure every user has a stats and ccsBreakdown object
             (DB.users || []).forEach(function(user) {
@@ -2445,6 +2892,7 @@
                 if (typeof user.stats.commentsPosted === 'undefined') user.stats.commentsPosted = 0;
                 if (!user.ccsBreakdown) user.ccsBreakdown = { votes:0, reports:0, courses:0, comments:0, likes:0, bills:0 };
                 if (!user.credibility) user.credibility = 0;
+                if (!user.profilePicId) user.profilePicId = '';
             });
         }
 
@@ -2502,7 +2950,8 @@
             const newReport = {
                 id: Date.now(), // temp ID, sheet assigns real one
                 title: data.title, location: data.location, category: data.category,
-                description: data.description, status: 'reported', upvotes: 0, image: false,
+                description: data.description, status: 'reported', upvotes: 0, image: (data.mediaItems && data.mediaItems.length > 0),
+                mediaItems: data.mediaItems || [],
                 createdBy: currentUser.id, createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 taggedLawmakers: data.taggedLawmakers || [],
@@ -2890,19 +3339,27 @@
             currentUser = DB.users.find(u => u.id === userId);
             if (currentUser) {
                 // Restore this user's upvotes from the full Upvotes dataset.
-                // DB._upvotes is [{userId, reportId}, ...] — one row per user+report pair.
-                // We filter to only this user's rows and extract the reportIds.
                 userUpvotes = new Set();
                 if (DB._upvotes && Array.isArray(DB._upvotes)) {
                     DB._upvotes.forEach(function(row) {
-                        // row is {userId, reportId} from the fixed AppScript readUpvotes()
                         if (Number(row.userId) === Number(currentUser.id)) {
                             userUpvotes.add(Number(row.reportId));
                         }
                     });
                 }
                 document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('sidebarAvatar').textContent = currentUser.name.split(' ').map(n => n[0]).join('');
+
+                // Sidebar avatar — show profile pic if available, else initials
+                const sidebarAvatarEl = document.getElementById('sidebarAvatar');
+                if (currentUser.profilePicId) {
+                    const initials = currentUser.name.split(' ').map(n => n[0]).join('');
+                    sidebarAvatarEl.innerHTML = `<img src="${DRIVE_VIEW_BASE}${currentUser.profilePicId}" alt="${initials}" onerror="this.parentElement.textContent='${initials}'">`;
+                    sidebarAvatarEl.style.padding = '0';
+                    sidebarAvatarEl.style.overflow = 'hidden';
+                } else {
+                    sidebarAvatarEl.textContent = currentUser.name.split(' ').map(n => n[0]).join('');
+                }
+
                 document.getElementById('sidebarUserName').textContent = currentUser.name;
                 document.getElementById('sidebarUserRole').textContent = currentUser.role + (getAdminLabel(currentUser) ? ' · ' + getAdminLabel(currentUser) : '');
                 const adminNav = document.getElementById('adminNavItem');
@@ -2921,6 +3378,7 @@
                 renderCurrentView();
                 updateStats();
                 updateTrendingWidget();
+                startNotifPolling(); // begin push notification polling
             }
         }
 
@@ -2952,8 +3410,11 @@
             namedUsers.forEach(function(user) {
                 const initials = user.name.split(' ').map(function(n) { return n[0]; }).join('');
                 const adminLabel = getAdminLabel(user) ? ' · ' + getAdminLabel(user) : '';
+                const avatarHtml = user.profilePicId
+                    ? `<div class="user-select-avatar" style="padding:0;overflow:hidden;"><img src="${DRIVE_VIEW_BASE}${user.profilePicId}" alt="${initials}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.parentElement.textContent='${initials}'"></div>`
+                    : `<div class="user-select-avatar">${initials}</div>`;
                 html += '<div class="user-select-card" onclick="login(' + user.id + ')">';
-                html += '<div class="user-select-avatar">' + initials + '</div>';
+                html += avatarHtml;
                 html += '<div style="font-weight:600;margin-bottom:0.25rem;">' + user.name + '</div>';
                 html += '<div style="font-size:0.8rem;color:var(--text-secondary);">' + user.role + '</div>';
                 html += '<div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:0.25rem;">Tier ' + user.tier + adminLabel + '</div>';
@@ -3074,12 +3535,26 @@
                                 `).join('')}
                             </div>
                         </div>
+                        <div class="form-group" id="reportMediaContainer">
+                            <label class="form-label">Add Media (optional) — up to ${MAX_MEDIA_PER_REPORT} files</label>
+                            <p style="font-size:0.78rem;color:var(--text-tertiary);margin-bottom:0.5rem;">Photos and videos as evidence. Max 4 MB per file. All major image &amp; video formats supported.</p>
+                            <div class="media-upload-zone" onclick="document.getElementById('reportMediaInput').click()">
+                                <input type="file" id="reportMediaInput" accept="image/*,video/*" multiple onchange="onMediaFileSelect(this,'reportMediaContainer')">
+                                <div style="font-size:1.5rem;margin-bottom:0.35rem;">📎</div>
+                                <div style="font-size:0.85rem;color:var(--text-secondary);">Click or drag &amp; drop photos/videos</div>
+                                <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:0.25rem;">Max ${MAX_MEDIA_PER_REPORT} files · 4 MB each · images or videos</div>
+                            </div>
+                            <div class="media-preview-grid"></div>
+                            <div class="media-upload-status"></div>
+                        </div>
                         <button type="submit" class="submit-btn" style="margin-top:1rem;">🚨 Submit Report (+${CCS_POINTS.report} CCS)</button>
                     </form>
                 </div>
                 <h2 style="margin: 2rem 0 1.5rem;">All Citizen Reports</h2>
                 ${DB.reports.map(report => renderReportCard(report)).join('')}
             `;
+            // Initialise the media upload drag-drop zone after DOM is set
+            setTimeout(() => initMediaUploadZone('reportMediaContainer'), 0);
         }
 
         function renderBudget() {
@@ -3528,9 +4003,7 @@
                         const followers = getFollowersOf(user.id).length;
                         return `
                         <div style="display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid var(--border-light);">
-                            <div class="user-avatar" style="width:44px;height:44px;font-size:1rem;">
-                                ${user.name.split(' ').map(n => n[0]).join('')}
-                            </div>
+                            ${renderUserAvatar(user, 44, '1rem')}
                             <div style="flex:1;">
                                 <div style="font-weight:600;">${user.name}</div>
                                 <div style="font-size:0.8rem;color:var(--text-tertiary);">${user.role} · ${user.state} · CCS ${Math.round(user.credibility)}</div>
@@ -3959,8 +4432,17 @@
             feed.innerHTML = `
                 <div class="card">
                     <div style="text-align: center; margin-bottom: 2rem;">
-                        <div style="width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-blue), #326a97); display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 2.5rem; margin: 0 auto 1rem;">
-                            ${currentUser.name.split(' ').map(n => n[0]).join('')}
+                        <div class="profile-pic-wrap" style="margin: 0 auto 1rem; width: 100px; height: 100px;">
+                            ${currentUser.profilePicId
+                                ? `<div style="width:100px;height:100px;border-radius:50%;overflow:hidden;border:3px solid var(--accent-blue);">
+                                    <img src="${DRIVE_VIEW_BASE}${currentUser.profilePicId}" alt="Profile" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentElement.style.display='none';document.getElementById('profileInitialsAvatar').style.display='flex'">
+                                   </div>
+                                   <div id="profileInitialsAvatar" style="display:none;width:100px;height:100px;border-radius:50%;background:linear-gradient(135deg,var(--accent-blue),#326a97);align-items:center;justify-content:center;color:white;font-weight:700;font-size:2.5rem;">${currentUser.name.split(' ').map(n => n[0]).join('')}</div>`
+                                : `<div style="width:100px;height:100px;border-radius:50%;background:linear-gradient(135deg,var(--accent-blue),#326a97);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:2.5rem;">${currentUser.name.split(' ').map(n => n[0]).join('')}</div>`
+                            }
+                            <label title="Change profile picture" style="position:absolute;bottom:2px;right:2px;background:var(--accent-blue);color:white;border:2px solid var(--bg-primary);border-radius:50%;width:28px;height:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:0.85rem;">
+                                📷<input type="file" accept="image/*" style="display:none" onchange="handleProfilePicChange(this)">
+                            </label>
                         </div>
                         <h2>${currentUser.name}</h2>
                         <p style="color: var(--text-secondary);">${currentUser.state} State · Tier ${currentUser.tier}</p>
@@ -4192,7 +4674,7 @@
                         const user = DB.users.find(u => u.id === req.userId);
                         return `
                         <div style="display:flex;align-items:center;gap:1rem;padding:0.75rem;background:var(--accent-soft);border-radius:8px;margin-bottom:0.75rem;">
-                            <div class="user-avatar" style="width:40px;height:40px;">${user?.name?.split(' ').map(n=>n[0]).join('') || '?'}</div>
+                            ${renderUserAvatar(user || {name: '?', id: 0}, 40, '1rem')}
                             <div style="flex:1;">
                                 <div style="font-weight:600;">${user?.name || 'Unknown'}</div>
                                 <div style="font-size:0.78rem;color:var(--text-tertiary);">${user?.role} · Tier ${user?.tier} · CCS ${Math.round(user?.credibility || 0)}</div>
@@ -4248,15 +4730,37 @@
                         ${page < totalPages-1 ? `<button class="btn-secondary" style="padding:0.4rem 0.8rem;font-size:0.8rem;" onclick="changeAdminUserPage(${page+1})">Next →</button>` : ''}
                     </div>
                 </div>` : ''}
+
+                <!-- Push Notification Sender (super admin only) -->
+                ${superAdmin ? `
+                <div class="card">
+                    <h3 style="margin-bottom:0.5rem;">📢 Send Platform Notification</h3>
+                    <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">Broadcast a message to all users — shown as a banner when they are logged in or on next login.</p>
+                    <div class="form-group">
+                        <label class="form-label">Quick Templates</label>
+                        <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.75rem;">
+                            <button class="action-btn" type="button" onclick="document.getElementById('adminNotifMsg').value='🎉 Barka da Sallah to all our Muslim users! Wishing you peace and blessings.'">Sallah Greeting</button>
+                            <button class="action-btn" type="button" onclick="document.getElementById('adminNotifMsg').value='📢 Platform update: New features have been added. Explore and give us feedback!'">Feature Update</button>
+                            <button class="action-btn" type="button" onclick="document.getElementById('adminNotifMsg').value='⚠️ Scheduled maintenance in 30 minutes. Save your work.'">Maintenance Alert</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Message</label>
+                        <textarea class="form-textarea" id="adminNotifMsg" placeholder="Type your announcement here…" style="min-height:80px;"></textarea>
+                    </div>
+                    <div style="display:flex;gap:0.75rem;align-items:center;">
+                        <button class="submit-btn" style="flex:1;" onclick="sendAdminNotification()">📤 Send to All Users</button>
+                        <button class="btn-secondary" onclick="previewAdminNotification()">Preview</button>
+                    </div>
+                    <div id="adminNotifStatus" style="margin-top:0.5rem;font-size:0.8rem;"></div>
+                </div>` : ''}
             `;
         }
 
         function renderAdminUserList(users) {
             return users.map(u => `
                 <div style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem;border-bottom:1px solid var(--border-light);" id="adminUserRow_${u.id}">
-                    <div class="user-avatar" style="width:36px;height:36px;font-size:0.8rem;flex-shrink:0;">
-                        ${u.name.split(' ').map(n=>n[0]).join('')}
-                    </div>
+                    ${renderUserAvatar(u, 36, '0.8rem')}
                     <div style="flex:1;min-width:0;">
                         <div style="font-weight:600;font-size:0.85rem;">${u.name} 
                             ${getAdminLabel(u) ? `<span style="font-size:0.65rem;">${getAdminLabel(u)}</span>` : ''}
@@ -4292,6 +4796,30 @@
         function changeAdminUserPage(page) {
             window._adminUserPage = page;
             renderAdminPanel();
+        }
+
+        async function sendAdminNotification() {
+            if (!isSuperAdmin(currentUser)) return;
+            const msg = (document.getElementById('adminNotifMsg') || {}).value || '';
+            if (!msg.trim()) { showToast('Please enter a message'); return; }
+            const statusEl = document.getElementById('adminNotifStatus');
+            if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-tertiary);">Sending…</span>';
+            const res = await apiPost('sendNotification', { message: msg.trim(), sentBy: currentUser.name });
+            if (res && res.ok) {
+                if (statusEl) statusEl.innerHTML = '<span style="color:var(--vote-yes);">✓ Notification sent to all users!</span>';
+                showToast('Notification broadcast sent ✓');
+                logActivity('NOTIFICATION_SENT', `Broadcast: "${msg.trim().slice(0,60)}${msg.length > 60 ? '…' : ''}"`);
+                setTimeout(() => { if (statusEl) statusEl.innerHTML = ''; }, 5000);
+            } else {
+                if (statusEl) statusEl.innerHTML = '<span style="color:var(--vote-no);">✗ Send failed — check console</span>';
+                showToast('Send failed');
+            }
+        }
+
+        function previewAdminNotification() {
+            const msg = (document.getElementById('adminNotifMsg') || {}).value || '';
+            if (!msg.trim()) { showToast('Enter a message to preview'); return; }
+            showPushNotif(msg.trim(), 'preview_' + Date.now());
         }
 
         async function changeReportStatus(reportId, newStatus) {
@@ -4633,6 +5161,7 @@
                         </div>
                     </div>
                     ${taggedHtml}
+                    ${renderReportMediaDisplay(report.mediaItems)}
                     <p style="color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem;">${report.description}</p>
                     <div class="report-actions">
                         <button class="action-btn ${isUpvoted ? 'upvoted' : ''}" onclick="toggleUpvote(${report.id})">
@@ -4757,6 +5286,15 @@
         function submitReport(event) {
             event.preventDefault();
             const form = event.target;
+
+            // Check if any media is still uploading
+            const stillUploading = _pendingMediaFiles.filter(m => m.uploading).length;
+            if (stillUploading > 0) {
+                showToast(`Please wait — ${stillUploading} file(s) still uploading…`);
+                return;
+            }
+
+            const mediaItems = getUploadedMediaIds();
             const data = {
                 title: form.title.value,
                 location: form.location.value,
@@ -4764,12 +5302,14 @@
                 description: form.description.value,
                 taggedLawmakers: [...currentTaggedLawmakers],
                 taggedOfficials: [...currentTaggedOfficials],
-                taggedUsers: [...currentTaggedUsers]
+                taggedUsers: [...currentTaggedUsers],
+                mediaItems: mediaItems
             };
             addReport(data);
             currentTaggedLawmakers = [];
             currentTaggedOfficials = [];
             currentTaggedUsers = [];
+            _pendingMediaFiles = [];
             form.reset();
             renderCurrentView();
         }
@@ -5064,6 +5604,22 @@
             alert('Profile updated successfully!');
             renderCurrentView();
             document.getElementById('sidebarUserName').textContent = currentUser.name;
+        }
+
+        async function handleProfilePicChange(input) {
+            if (!input.files || !input.files[0]) return;
+            const fileId = await uploadProfilePicture(input.files[0]);
+            if (fileId) {
+                await updateUserProfile(currentUser.id, { profilePicId: fileId });
+                // Update sidebar avatar
+                const sidebarAvatarEl = document.getElementById('sidebarAvatar');
+                const initials = currentUser.name.split(' ').map(n => n[0]).join('');
+                sidebarAvatarEl.innerHTML = `<img src="${DRIVE_VIEW_BASE}${fileId}" alt="${initials}" onerror="this.parentElement.textContent='${initials}'">`;
+                sidebarAvatarEl.style.padding = '0';
+                sidebarAvatarEl.style.overflow = 'hidden';
+                showToast('Profile picture updated! ✓');
+                renderCurrentView();
+            }
         }
 
         function showCreateMenu() {
